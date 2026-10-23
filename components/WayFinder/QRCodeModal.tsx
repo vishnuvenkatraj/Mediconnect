@@ -12,8 +12,8 @@ interface QRCodeModalProps {
   onClose: () => void;
 }
 
-// Auto-detected local network IP from Vite host interface
-const DETECTED_LAN_IP = '172.3.4.218';
+// Auto-detected local network IP from current Wi-Fi adapter
+const DETECTED_LAN_IP = (typeof window !== 'undefined' && (window as any).__MEDICONNECT_LAN_IP__) || '172.3.8.107';
 
 export const QRCodeModal: React.FC<QRCodeModalProps> = ({ location, route, isOpen, onClose }) => {
   const [copied, setCopied] = useState(false);
