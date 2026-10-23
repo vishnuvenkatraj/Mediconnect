@@ -1,11 +1,10 @@
 import React from 'react';
 import { MOCK_BILLS } from '../../constants';
 import type { Bill, User, Invoice } from '../../types';
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import EmptyState from '../../components/Common/EmptyState';
 import { formatDisplayDate } from '../../services/dataSanitizer';
 import { saveInvoice as dbSaveInvoice } from '../../services/database';
+import { downloadBillPdf } from '../../services/pdfBillGenerator';
 
 interface BillingHistoryProps {
   patientId: string;
@@ -47,89 +46,18 @@ const BillingHistory: React.FC<BillingHistoryProps> = ({ patientId, user, invoic
     alert("Payment successful! Your invoice has been marked as Paid.");
   };
   
-  const handleDownloadPdf = (bill: Bill) => {
+  const handleDownloadPdf = async (bill: Bill) => {
     try {
-      const doc = new jsPDF();
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const pageHeight = doc.internal.pageSize.getHeight();
-
-      // --- Header ---
-      // Logo
-      doc.setDrawColor(0, 87, 168); // primary color
-      doc.setLineWidth(0.5);
-      doc.circle(20, 20, 8); // Circle
-      doc.setLineWidth(1);
-      doc.line(20, 16, 20, 24); // Vertical line of plus
-      doc.line(16, 20, 24, 20); // Horizontal line of plus
-
-      // Hospital Name
-      doc.setTextColor(0, 87, 168);
-      doc.setFontSize(16);
-      doc.setFont('helvetica', 'bold');
-      doc.text("MediConnect HMS", 32, 22);
-      
-      // Invoice Title
-      doc.setTextColor(100); // Gray color
-      doc.setFontSize(28);
-      doc.setFont('helvetica', 'bold');
-      doc.text('INVOICE', pageWidth - 20, 25, { align: 'right' });
-
-      // Line separator
-      doc.setDrawColor(200);
-      doc.setLineWidth(0.2);
-      doc.line(14, 35, pageWidth - 14, 35);
-      
-      // Reset text color
-      doc.setTextColor(0, 0, 0);
-
-      // --- Bill To & Invoice Info Table ---
-      autoTable(doc, {
-        body: [
-          [
-            { content: `BILL TO:\n${user.name}\n${user.email}`, styles: { fontStyle: 'bold' } },
-            { content: `Invoice ID: ${bill.id}\nDate: ${new Date(bill.date).toLocaleDateString()}\nStatus: ${bill.status}`, styles: { halign: 'right' } }
-          ]
-        ],
-        startY: 40,
-        theme: 'plain',
-      });
-
-      // --- Invoice Items Table ---
-      const lastTableY = (doc as any).lastAutoTable?.finalY ?? 55;
-      autoTable(doc, {
-        head: [['Description', 'Amount']],
-        body: [
-          [bill.service, `$${bill.amount.toFixed(2)}`]
-        ],
-        foot: [
-          [{ content: 'Total Due', styles: { halign: 'right', fontStyle: 'bold', fontSize: 12 } }, { content: `$${bill.amount.toFixed(2)}`, styles: { fontStyle: 'bold', fontSize: 12 } }]
-        ],
-        headStyles: { fillColor: [0, 87, 168] },
-        footStyles: { fillColor: [234, 234, 234], textColor: 20 },
-        startY: lastTableY + 10,
-      });
-      
-      // --- Footer ---
-      const footerY = pageHeight - 20;
-      doc.setDrawColor(200);
-      doc.setLineWidth(0.2);
-      doc.line(14, footerY, pageWidth - 14, footerY);
-      doc.setFontSize(9);
-      doc.setTextColor(150);
-      doc.text(
-          `© ${new Date().getFullYear()} MediConnect HMS. All rights reserved.`, 
-          pageWidth / 2, 
-          footerY + 8, 
-          { align: 'center' }
-      );
-      doc.text(
-          '123 Health St, Medcity, 12345 | contact@mediconnect.hms',
-          pageWidth / 2,
-          footerY + 12,
-          { align: 'center' }
+      // Find full invoice if available to get line-by-line itemization
+      const matchingInvoice = (invoices || []).find(
+        inv => inv.id === bill.id || (inv.patientId === patientId && Math.abs(inv.totalAmount - bill.amount) < 0.01)
       );
 
-      doc.save(`Invoice_${user.name.replace(/\s/g, '_')}_${bill.id}.pdf`);
+      await downloadBillPdf({
+        bill,
+        invoice: matchingInvoice,
+        patientUser: user,
+      });
     } catch (err) {
       console.error("Invoice PDF generation error:", err);
       alert("Failed to download invoice PDF. Please try again.");
@@ -155,21 +83,33 @@ const BillingHistory: React.FC<BillingHistoryProps> = ({ patientId, user, invoic
               bills.map(bill => (
                 <tr key={bill.id} className="border-b border-gray-200 dark:border-dark-border hover:bg-gray-50 dark:hover:bg-dark-bg">
                   <td className="py-3 px-4">{formatDisplayDate(bill.date)}</td>
-                  <td className="py-3 px-4">{bill.service}</td>
-                  <td className="py-3 px-4">${Number(bill.amount || 0).toFixed(2)}</td>
+                  <td className="py-3 px-4 font-medium">{bill.service}</td>
+                  <td className="py-3 px-4 font-semibold">${Number(bill.amount || 0).toFixed(2)}</td>
                   <td className="py-3 px-4">
-                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                    <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${
                       bill.status === 'Paid' ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300'
                     }`}>
                       {bill.status}
                     </span>
                   </td>
                   <td className="py-3 px-4">
-                    {bill.status === 'Due' ? (
-                      <button onClick={() => handlePayBill(bill.id)} className="bg-secondary text-white font-semibold py-1 px-3 rounded-md text-sm hover:bg-green-600 transition">Pay Now</button>
-                    ) : (
-                      <button onClick={() => handleDownloadPdf(bill)} className="text-primary dark:text-blue-400 font-semibold hover:underline text-sm">Download PDF</button>
-                    )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={() => handleDownloadPdf(bill)}
+                        className="inline-flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-primary dark:bg-blue-900/40 dark:text-blue-300 dark:hover:bg-blue-900/60 font-semibold py-1.5 px-3 rounded-lg text-xs transition border border-blue-200 dark:border-blue-700"
+                        title="Download Official PDF Bill with Hospital Logo"
+                      >
+                        <span>📄</span> Download Bill
+                      </button>
+                      {bill.status === 'Due' && (
+                        <button
+                          onClick={() => handlePayBill(bill.id)}
+                          className="bg-secondary text-white font-semibold py-1.5 px-3 rounded-lg text-xs hover:bg-green-600 transition shadow-sm"
+                        >
+                          Pay Now
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))

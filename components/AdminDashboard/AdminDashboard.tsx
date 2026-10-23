@@ -8,6 +8,7 @@ import { getAdminInsights } from '../../services/geminiService';
 import { Remarkable } from 'remarkable';
 import ConfirmationModal from '../ConfirmationModal';
 import WayFinderManagement from './WayFinderManagement';
+import { downloadBillPdf } from '../../services/pdfBillGenerator';
 
 const md = new Remarkable();
 
@@ -660,9 +661,36 @@ const InvoiceModal: React.FC<InvoiceModalProps> = ({ invoice, patients, onSave, 
                         Total: ${totalAmount.toFixed(2)}
                     </div>
                 </div>
-                <div className="p-4 bg-gray-50 dark:bg-dark-bg/50 border-t dark:border-dark-border flex justify-end gap-3 mt-auto">
-                    <button onClick={onClose} className="bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 transition dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500">Cancel</button>
-                    <button onClick={handleSubmit} className="bg-primary text-white font-semibold py-2 px-4 rounded-lg hover:bg-primary/90 transition">Save Invoice</button>
+                <div className="p-4 bg-gray-50 dark:bg-dark-bg/50 border-t dark:border-dark-border flex justify-between items-center gap-3 mt-auto">
+                    {invoice && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                const currentPatient = patients.find(p => p.id === patientId);
+                                downloadBillPdf({
+                                    invoice: {
+                                        id: invoice.id,
+                                        invoiceNumber: invoice.invoiceNumber,
+                                        patientId,
+                                        patientName: currentPatient?.name || invoice.patientName,
+                                        issueDate,
+                                        dueDate,
+                                        items: items as BillingRecord[],
+                                        totalAmount,
+                                        status,
+                                    },
+                                    patientUser: currentPatient,
+                                });
+                            }}
+                            className="bg-white border border-blue-200 text-primary dark:bg-gray-700 dark:border-gray-600 dark:text-blue-300 font-semibold py-2 px-3.5 rounded-lg hover:bg-blue-50 dark:hover:bg-gray-600 transition flex items-center gap-1.5 text-sm shadow-sm"
+                        >
+                            <span>📄</span> Download Bill PDF
+                        </button>
+                    )}
+                    <div className="flex gap-3 ml-auto">
+                        <button onClick={onClose} className="bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 transition dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500">Cancel</button>
+                        <button onClick={handleSubmit} className="bg-primary text-white font-semibold py-2 px-4 rounded-lg hover:bg-primary/90 transition">Save Invoice</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -768,6 +796,16 @@ const BillingManagement: React.FC<AdminDashboardProps> = ({ invoices, setInvoice
                                 </td>
                                 <td className="py-2 px-3 flex gap-2 items-center text-sm">
                                     <button onClick={() => handleView(inv)} className="text-primary hover:underline font-semibold">View</button>
+                                    <button
+                                        onClick={() => {
+                                            const patient = patients.find(p => p.id === inv.patientId || p.name === inv.patientName);
+                                            downloadBillPdf({ invoice: inv, patientUser: patient });
+                                        }}
+                                        className="text-blue-600 hover:text-blue-800 dark:text-blue-400 font-semibold flex items-center gap-1 hover:underline"
+                                        title="Download Official PDF Bill"
+                                    >
+                                        <span>📄</span> PDF
+                                    </button>
                                     {inv.status !== 'Paid' && (
                                         <button onClick={() => handleMarkAsPaid(inv.id)} className="text-secondary hover:underline font-semibold">Mark Paid</button>
                                     )}
@@ -789,8 +827,67 @@ const BillingManagement: React.FC<AdminDashboardProps> = ({ invoices, setInvoice
 const ReportsTab: React.FC<AdminDashboardProps> = ({ allUsers, medicines, invoices }) => {
     const generatePdf = (title: string, head: string[][], body: (string|number)[][], filename: string) => {
         const doc = new jsPDF();
-        doc.text(title, 14, 20);
-        autoTable(doc, { head, body, startY: 25 });
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+
+        // Top brand accent bar
+        doc.setFillColor(0, 87, 168);
+        doc.rect(0, 0, pageWidth * 0.72, 3, 'F');
+        doc.setFillColor(0, 168, 150);
+        doc.rect(pageWidth * 0.72, 0, pageWidth * 0.28, 3, 'F');
+
+        // Header Title
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(15);
+        doc.setTextColor(0, 87, 168);
+        doc.text("MediConnect HMS", 14, 15);
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 116, 139);
+        doc.text(`Official System Report • Generated on ${new Date().toLocaleDateString()}`, 14, 20);
+
+        doc.setFontSize(13);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text(title, 14, 28);
+
+        // Divider
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.4);
+        doc.line(14, 31, pageWidth - 14, 31);
+
+        autoTable(doc, {
+            head,
+            body,
+            startY: 35,
+            theme: 'grid',
+            headStyles: {
+                fillColor: [0, 87, 168],
+                textColor: [255, 255, 255],
+                fontStyle: 'bold',
+                fontSize: 9,
+            },
+            alternateRowStyles: {
+                fillColor: [248, 250, 252],
+            },
+            styles: {
+                fontSize: 8.5,
+                lineColor: [226, 232, 240],
+                lineWidth: 0.2,
+                cellPadding: 3,
+            },
+        });
+
+        // Footer
+        const footerY = pageHeight - 12;
+        doc.setDrawColor(226, 232, 240);
+        doc.line(14, footerY, pageWidth - 14, footerY);
+        doc.setFontSize(7.5);
+        doc.setTextColor(148, 163, 184);
+        doc.text(`© ${new Date().getFullYear()} MediConnect HMS • Confidential Administrative Document`, 14, footerY + 5);
+        doc.text("Page 1 of 1", pageWidth - 14, footerY + 5, { align: 'right' });
+
         doc.save(filename);
     };
 
