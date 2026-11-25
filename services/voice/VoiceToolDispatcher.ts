@@ -9,6 +9,7 @@ import { saveAppointment, deleteAppointment, saveNursePage } from '../database';
 import { getQueueForPatient, acknowledgeAlert, stopVibration, triggerVibration } from '../queueService';
 import { getHospitalLocations, calculateRoute } from '../wayFinderService';
 import { translateClinicalRecordWithGemini } from '../geminiService';
+import { findDoctorByQuery, parseDateFromText } from './doctorDateParser';
 
 export const VOICE_TOOL_DEFINITIONS: VoiceToolDefinition[] = [
   {
@@ -361,21 +362,11 @@ export class VoiceToolDispatcher {
       };
     }
 
-    const query = (params.doctorNameOrSpec || '').toLowerCase();
-    const matchedDoctor = MOCK_DOCTORS.find(d =>
-      d.name.toLowerCase().includes(query) ||
-      d.specialization.toLowerCase().includes(query)
-    ) || MOCK_DOCTORS[0];
+    const matchedDoctor = findDoctorByQuery(params.doctorNameOrSpec || '', MOCK_DOCTORS) || MOCK_DOCTORS[0];
 
-    // Format target date
-    let bookingDate = params.date || 'tomorrow';
-    if (bookingDate === 'tomorrow') {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      bookingDate = tomorrow.toISOString().split('T')[0];
-    } else if (bookingDate === 'today') {
-      bookingDate = new Date().toISOString().split('T')[0];
-    }
+    // Format target date using robust natural language parser
+    const parsedDate = parseDateFromText(params.date || 'tomorrow');
+    const bookingDate = parsedDate || (params.date === 'today' ? new Date().toISOString().split('T')[0] : new Date(Date.now() + 86400000).toISOString().split('T')[0]);
 
     const bookingTime = params.time || '10:00 AM';
 
@@ -630,18 +621,10 @@ export class VoiceToolDispatcher {
     params: Record<string, any>,
     context: VoiceToolExecutionContext
   ): VoiceToolExecutionResult {
-    const q = (params.specialtyOrName || '').toLowerCase();
-    const doc = MOCK_DOCTORS.find(d =>
-      d.name.toLowerCase().includes(q) ||
-      d.specialization.toLowerCase().includes(q)
-    ) || MOCK_DOCTORS[0];
+    const doc = findDoctorByQuery(params.specialtyOrName || '', MOCK_DOCTORS) || MOCK_DOCTORS[0];
 
-    let targetDate = params.date || 'tomorrow';
-    if (targetDate === 'tomorrow') {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      targetDate = tomorrow.toISOString().split('T')[0];
-    }
+    const parsedDate = parseDateFromText(params.date || 'tomorrow');
+    const targetDate = parsedDate || (params.date === 'today' ? new Date().toISOString().split('T')[0] : new Date(Date.now() + 86400000).toISOString().split('T')[0]);
 
     // Standard available consultation slots
     const standardSlots = ['09:00 AM', '10:00 AM', '11:30 AM', '02:00 PM', '04:00 PM'];

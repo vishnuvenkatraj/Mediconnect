@@ -10,6 +10,15 @@ import { SpeechSynthesisService } from './SpeechSynthesisService';
 import { VoiceToolDispatcher } from './VoiceToolDispatcher';
 import { MOCK_DOCTORS } from '../../constants';
 import { getChatbotResponse } from '../geminiService';
+import {
+  findDoctorByQuery,
+  extractSpecialty,
+  getAllDepartments,
+  parseDateFromText,
+  detectMonthOnly,
+  parseTimeFromText,
+  type MonthPreference
+} from './doctorDateParser';
 
 interface ProgressiveBookingState {
   inProgress: boolean;
@@ -20,6 +29,7 @@ interface ProgressiveBookingState {
   date?: string;
   availableSlots?: string[];
   time?: string;
+  monthOnlyPreference?: MonthPreference;
 }
 
 interface CancellationState {
@@ -375,34 +385,93 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
 
       // Step: Awaiting Department / Doctor Selection
       if (this.bookingState.step === 'awaiting_spec') {
-        const doc = this.matchDoctorFromText(q);
-        const spec = doc ? doc.specialization : this.extractSpecialty(q);
+        const doc = findDoctorByQuery(q, MOCK_DOCTORS);
+        const spec = doc ? doc.specialization : extractSpecialty(q);
 
         if (spec) {
+          const matchedDoc = doc || MOCK_DOCTORS.find(d => d.specialization === spec);
           this.bookingState.doctorSpec = spec;
-          this.bookingState.doctorName = doc?.name || `Dr. (${spec})`;
-          this.bookingState.doctorId = doc?.id;
+          this.bookingState.doctorName = matchedDoc?.name || `Dr. (${spec})`;
+          this.bookingState.doctorId = matchedDoc?.id;
           this.bookingState.step = 'awaiting_date';
 
+          // Check if patient also mentioned a date in this utterance (e.g. "Cardiology on December 15")
+          const monthOnly = detectMonthOnly(q);
+          const date = parseDateFromText(q);
+
+          if (date) {
+            this.bookingState.date = date;
+            const availRes = await VoiceToolDispatcher.executeTool('check_doctor_availability', {
+              specialtyOrName: matchedDoc?.id || matchedDoc?.name || spec,
+              date: date
+            }, context);
+            const slots: string[] = availRes.data?.availableSlots || ['10:00 AM', '11:30 AM'];
+            this.bookingState.availableSlots = slots;
+            this.bookingState.step = 'awaiting_slot';
+
+            return {
+              replyText: `📅 **Available Slots for ${this.bookingState.doctorName} on ${date}:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
+              spokenReply: `Available slots for ${this.bookingState.doctorName} on ${date} are ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`,
+              detectedLanguage: detectedLang
+            };
+          }
+
+          if (monthOnly) {
+            this.bookingState.monthOnlyPreference = monthOnly;
+            const docLabel = this.bookingState.doctorName;
+            const msg = `We have consultations available with ${docLabel} in ${monthOnly.monthName} ${monthOnly.year}. Which date would you prefer? (For example: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15, or ${monthOnly.monthName} 22)`;
+            return { replyText: msg, spokenReply: msg, detectedLanguage: detectedLang };
+          }
+
+          const docLabel = matchedDoc ? `${matchedDoc.name} (${spec})` : spec;
           const askDate = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
             ? `${spec} துறை தேர்ந்தெடுக்கப்பட்டது. எந்த தேதியில் நீங்கள் வர விரும்புகிறீர்கள்? (உதாரணம்: நாளை, அல்லது ஒரு குறிப்பிட்ட தேதி)`
-            : `${spec} selected. Which date would you prefer? (e.g. Tomorrow, or a specific date)`;
+            : `${docLabel} selected. Which date would you prefer? (e.g. Tomorrow, next Friday, or a specific date like December 15)`;
           return { replyText: askDate, spokenReply: askDate, detectedLanguage: detectedLang };
         } else {
-          const askAgain = "Which department or doctor would you like to consult? Available: Cardiology, Pediatrics, Neurology, Orthopedics, or General Medicine.";
+          const deptList = getAllDepartments(MOCK_DOCTORS).join(', ');
+          const askAgain = `Which department or doctor would you like to consult? Available: ${deptList}.`;
           return { replyText: askAgain, spokenReply: askAgain, detectedLanguage: detectedLang };
         }
       }
 
       // Step: Awaiting Date Selection -> Checks Backend Availability
       if (this.bookingState.step === 'awaiting_date') {
-        const resolvedDate = this.parseDateFromText(q);
+        // 1. Check if patient changed the doctor or department
+        const changedDoc = findDoctorByQuery(q, MOCK_DOCTORS);
+        const hasDoctorChange = changedDoc && (q.includes('change') || q.includes('doctor') || q.includes('dr') || q.includes('with') || q.includes('instead'));
+        if (hasDoctorChange) {
+          this.bookingState.doctorName = changedDoc.name;
+          this.bookingState.doctorId = changedDoc.id;
+          this.bookingState.doctorSpec = changedDoc.specialization; // Remap department correctly!
+
+          if (!parseDateFromText(q) && !detectMonthOnly(q)) {
+            const askNewDate = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
+              ? `மருத்துவர் ${changedDoc.name} (${changedDoc.specialization}) தேர்ந்தெடுக்கப்பட்டார். எந்த தேதியில் நீங்கள் வர விரும்புகிறீர்கள்?`
+              : detectedLang === 'hi-IN'
+              ? `डॉक्टर बदलकर ${changedDoc.name} (${changedDoc.specialization}) कर दिया गया है। आप किस तारीख को आना चाहेंगे?`
+              : `Doctor changed to ${changedDoc.name} (${changedDoc.specialization}). Which date would you prefer? (You can say Tomorrow, next Friday, or a specific date like December 15)`;
+            return { replyText: askNewDate, spokenReply: askNewDate, detectedLanguage: detectedLang };
+          }
+        }
+
+        // 2. Check if user specified a month-only preference
+        const monthOnly = detectMonthOnly(q);
+        if (monthOnly) {
+          this.bookingState.monthOnlyPreference = monthOnly;
+          const docName = this.bookingState.doctorName || 'our specialist';
+          const msg = `We have consultations available with ${docName} in ${monthOnly.monthName} ${monthOnly.year}. Which date would you prefer? (For example: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15, or ${monthOnly.monthName} 22)`;
+          return { replyText: msg, spokenReply: msg, detectedLanguage: detectedLang };
+        }
+
+        // 3. Parse specific date (using pending month if available)
+        const resolvedDate = parseDateFromText(q, new Date(), this.bookingState.monthOnlyPreference);
         if (resolvedDate) {
           this.bookingState.date = resolvedDate;
 
-          // Call backend availability check
+          // Call backend availability check for the RETAINED doctor
           const availRes = await VoiceToolDispatcher.executeTool('check_doctor_availability', {
-            specialtyOrName: this.bookingState.doctorSpec,
+            specialtyOrName: this.bookingState.doctorId || this.bookingState.doctorName || this.bookingState.doctorSpec,
             date: resolvedDate
           }, context);
 
@@ -411,30 +480,53 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
           this.bookingState.step = 'awaiting_slot';
 
           if (slots.length === 0) {
-            const noSlots = `Sorry, there are no available slots for ${resolvedDate}. Would you like to check another date?`;
+            const noSlots = `Sorry, ${this.bookingState.doctorName} has no available slots on ${resolvedDate}. Would you like to check another date?`;
             this.bookingState.step = 'awaiting_date';
             return { replyText: noSlots, spokenReply: noSlots, detectedLanguage: detectedLang };
           }
 
           const offerSlots = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
             ? `${resolvedDate} அன்று ${slots.slice(0, 2).join(' மற்றும் ')} ஆகிய நேரங்கள் உள்ளன. எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?`
-            : `There are available slots on ${resolvedDate}: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+            : detectedLang === 'hi-IN'
+            ? `${resolvedDate} को उपलब्ध समय: ${slots.slice(0, 2).join(' और ')}। आप कौन सा समय पसंद करेंगे?`
+            : `There are available slots for ${this.bookingState.doctorName} on ${resolvedDate}: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
 
           return {
-            replyText: `📅 **Available Slots on ${resolvedDate}:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
+            replyText: `📅 **Available Slots on ${resolvedDate} (${this.bookingState.doctorName}):**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
             spokenReply: offerSlots,
             detectedLanguage: detectedLang
           };
         } else {
-          const askDateAgain = "Which date would you prefer? (e.g. Tomorrow, or a date like 2026-11-26)";
+          const askDateAgain = `Which date would you prefer with ${this.bookingState.doctorName}? (You can say Tomorrow, next Friday, or a specific date like December 15)`;
           return { replyText: askDateAgain, spokenReply: askDateAgain, detectedLanguage: detectedLang };
         }
       }
 
       // Step: Awaiting Slot Choice -> Asks for Explicit Confirmation
       if (this.bookingState.step === 'awaiting_slot') {
-        // Mid-flow date correction check
-        const correctedDate = this.parseDateFromText(q);
+        // 1. Check if patient changed the DOCTOR
+        const changedDoc = findDoctorByQuery(q, MOCK_DOCTORS);
+        if (changedDoc && (q.includes('change') || q.includes('doctor') || q.includes('dr') || q.includes('instead')) && changedDoc.id !== this.bookingState.doctorId) {
+          this.bookingState.doctorName = changedDoc.name;
+          this.bookingState.doctorId = changedDoc.id;
+          this.bookingState.doctorSpec = changedDoc.specialization; // Remap department correctly!
+
+          const availRes = await VoiceToolDispatcher.executeTool('check_doctor_availability', {
+            specialtyOrName: changedDoc.id || changedDoc.name,
+            date: this.bookingState.date
+          }, context);
+          const slots: string[] = availRes.data?.availableSlots || ['10:00 AM', '11:30 AM'];
+          this.bookingState.availableSlots = slots;
+          const msg = `Doctor changed to ${changedDoc.name} (${changedDoc.specialization}). Available slots on ${this.bookingState.date} are: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+          return {
+            replyText: `👨‍⚕️ **Doctor Updated to ${changedDoc.name} (${changedDoc.specialization})**\n📅 Available slots on ${this.bookingState.date}:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
+            spokenReply: msg,
+            detectedLanguage: detectedLang
+          };
+        }
+
+        // 2. Check if patient changed the DATE (e.g. "Change it to December 18" / "No, change date to 2026-11-30")
+        const correctedDate = parseDateFromText(q, new Date(), this.bookingState.monthOnlyPreference);
         const isDateCorrection = correctedDate && (
           q.includes('date') || q.includes('change') || q.includes('no') ||
           q.includes('instead') || q.includes('different') || correctedDate !== this.bookingState.date
@@ -442,8 +534,9 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
 
         if (isDateCorrection && correctedDate) {
           this.bookingState.date = correctedDate;
+          // Re-query availability for the RETAINED doctor on the new date
           const availRes = await VoiceToolDispatcher.executeTool('check_doctor_availability', {
-            specialtyOrName: this.bookingState.doctorSpec,
+            specialtyOrName: this.bookingState.doctorId || this.bookingState.doctorName || this.bookingState.doctorSpec,
             date: correctedDate
           }, context);
 
@@ -451,7 +544,7 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
           this.bookingState.availableSlots = slots;
 
           if (slots.length === 0) {
-            const noSlots = `Sorry, there are no available slots for ${correctedDate}. Would you like to check another date?`;
+            const noSlots = `Sorry, ${this.bookingState.doctorName} has no available slots for ${correctedDate}. Would you like to check another date?`;
             this.bookingState.step = 'awaiting_date';
             return { replyText: noSlots, spokenReply: noSlots, detectedLanguage: detectedLang };
           }
@@ -460,16 +553,17 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
             ? `தேதி ${correctedDate}-க்கு மாற்றப்பட்டது. கிடைக்கும் நேரங்கள்: ${slots.slice(0, 2).join(' மற்றும் ')}. எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?`
             : detectedLang === 'hi-IN'
             ? `तारीख बदलकर ${correctedDate} कर दी गई है। उपलब्ध समय: ${slots.slice(0, 2).join(' और ')}। आप कौन सा समय पसंद करेंगे?`
-            : `Date updated to ${correctedDate}. Available slots are: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+            : `Date updated to ${correctedDate} for ${this.bookingState.doctorName}. Available slots are: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
 
           return {
-            replyText: `📅 **Updated Date to ${correctedDate}:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
+            replyText: `📅 **Updated Date to ${correctedDate} (${this.bookingState.doctorName}):**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
             spokenReply: offerSlots,
             detectedLanguage: detectedLang
           };
         }
 
-        const chosenSlot = this.parseTimeFromText(q, this.bookingState.availableSlots);
+        // 3. Otherwise, process as slot choice
+        const chosenSlot = parseTimeFromText(q, this.bookingState.availableSlots);
         this.bookingState.time = chosenSlot;
         this.bookingState.step = 'awaiting_confirmation';
 
@@ -480,6 +574,8 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
 
         const confirmationPrompt = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
           ? `${department} துறையில் ${doctorName} மருத்துவரிடம் ${date} அன்று ${time} மணிக்கு appointment உறுதி செய்யவா?`
+          : detectedLang === 'hi-IN'
+          ? `क्या मैं ${department} विभाग में ${doctorName} के साथ ${date} को ${time} बजे अपॉइंटमेंट कन्फर्म करूँ?`
           : `I have ${doctorName} in ${department} on ${date} at ${time}. Should I confirm this appointment?`;
 
         return {
@@ -492,6 +588,8 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
       // Step: Explicit Confirmation Response Check
       if (this.bookingState.step === 'awaiting_confirmation') {
         if (q.includes('yes') || q.includes('confirm') || q.includes('sure') || q.includes('correct') || q.includes('aama') || q.includes('haan')) {
+          const finalDocId = this.bookingState.doctorId;
+          const finalDocName = this.bookingState.doctorName;
           const finalSpec = this.bookingState.doctorSpec!;
           const finalDate = this.bookingState.date!;
           const finalTime = this.bookingState.time!;
@@ -499,7 +597,7 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
 
           // Execute actual backend booking tool
           const bookingResult = await VoiceToolDispatcher.executeTool('book_appointment', {
-            doctorNameOrSpec: finalSpec,
+            doctorNameOrSpec: finalDocId || finalDocName || finalSpec,
             date: finalDate,
             time: finalTime
           }, context);
@@ -518,31 +616,53 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
           return { replyText: cancelMsg, spokenReply: cancelMsg, detectedLanguage: detectedLang };
         }
 
-        // Mid-flow date correction at confirmation step
-        const correctedDate = this.parseDateFromText(q);
-        if (correctedDate && (q.includes('change') || q.includes('date') || q.includes('different') || q.includes('instead'))) {
-          this.bookingState.date = correctedDate;
+        // Change doctor at confirmation step
+        const changedDoc = findDoctorByQuery(q, MOCK_DOCTORS);
+        if (changedDoc && (q.includes('change') || q.includes('doctor') || q.includes('dr') || q.includes('instead')) && changedDoc.id !== this.bookingState.doctorId) {
+          this.bookingState.doctorName = changedDoc.name;
+          this.bookingState.doctorId = changedDoc.id;
+          this.bookingState.doctorSpec = changedDoc.specialization;
           this.bookingState.step = 'awaiting_slot';
+
           const availRes = await VoiceToolDispatcher.executeTool('check_doctor_availability', {
-            specialtyOrName: this.bookingState.doctorSpec,
-            date: correctedDate
+            specialtyOrName: changedDoc.id || changedDoc.name,
+            date: this.bookingState.date
           }, context);
           const slots: string[] = availRes.data?.availableSlots || ['10:00 AM', '11:30 AM'];
           this.bookingState.availableSlots = slots;
-          const offerSlots = `Date updated to ${correctedDate}. Available slots are: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+          const offerSlots = `Doctor changed to ${changedDoc.name} (${changedDoc.specialization}). Available slots on ${this.bookingState.date} are: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
           return {
-            replyText: `📅 **Updated Date to ${correctedDate}:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
+            replyText: `👨‍⚕️ **Doctor Updated to ${changedDoc.name} (${changedDoc.specialization})**\n📅 Available slots on ${this.bookingState.date}:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
             spokenReply: offerSlots,
             detectedLanguage: detectedLang
           };
         }
 
-        // Mid-flow correction: e.g. "change time to 2 PM" or "change to Dr. White"
+        // Mid-flow date correction at confirmation step
+        const correctedDate = parseDateFromText(q, new Date(), this.bookingState.monthOnlyPreference);
+        if (correctedDate && (q.includes('change') || q.includes('date') || q.includes('different') || q.includes('instead'))) {
+          this.bookingState.date = correctedDate;
+          this.bookingState.step = 'awaiting_slot';
+          const availRes = await VoiceToolDispatcher.executeTool('check_doctor_availability', {
+            specialtyOrName: this.bookingState.doctorId || this.bookingState.doctorName || this.bookingState.doctorSpec,
+            date: correctedDate
+          }, context);
+          const slots: string[] = availRes.data?.availableSlots || ['10:00 AM', '11:30 AM'];
+          this.bookingState.availableSlots = slots;
+          const offerSlots = `Date updated to ${correctedDate} for ${this.bookingState.doctorName}. Available slots are: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+          return {
+            replyText: `📅 **Updated Date to ${correctedDate} (${this.bookingState.doctorName}):**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
+            spokenReply: offerSlots,
+            detectedLanguage: detectedLang
+          };
+        }
+
+        // Mid-flow time correction
         if (q.includes('change') || q.includes('different') || q.includes('pm') || q.includes('am')) {
-          const newSlot = this.parseTimeFromText(q);
+          const newSlot = parseTimeFromText(q);
           if (newSlot) {
             this.bookingState.time = newSlot;
-            const reconfirm = `Updated time to ${newSlot}. Should I confirm this appointment for ${this.bookingState.date} at ${newSlot}?`;
+            const reconfirm = `Updated time to ${newSlot}. Should I confirm this appointment for ${this.bookingState.date} with ${this.bookingState.doctorName} at ${newSlot}?`;
             return { replyText: reconfirm, spokenReply: reconfirm, detectedLanguage: detectedLang };
           }
         }
@@ -576,9 +696,10 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
       q.includes('doctor se milna hai');
 
     if (isBookingStarter) {
-      const doc = this.matchDoctorFromText(q);
-      const spec = doc ? doc.specialization : this.extractSpecialty(q);
-      const date = this.parseDateFromText(q);
+      const doc = findDoctorByQuery(q, MOCK_DOCTORS);
+      const spec = doc ? doc.specialization : extractSpecialty(q);
+      const monthOnly = detectMonthOnly(q);
+      const date = parseDateFromText(q);
 
       this.bookingState = {
         inProgress: true,
@@ -586,23 +707,40 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
         doctorSpec: spec,
         doctorName: doc?.name,
         doctorId: doc?.id,
-        date: date
+        date: date,
+        monthOnlyPreference: monthOnly
       };
 
       if (!spec) {
-        let askSpec = "Sure. Which department or doctor would you like to consult? (e.g. Cardiology, Pediatrics, Neurology, Orthopedics, or General Medicine)";
+        const deptList = getAllDepartments(MOCK_DOCTORS).join(', ');
+        let askSpec = `Sure. Which department or doctor would you like to consult? (e.g. ${deptList})`;
         if (detectedLang === 'ta-IN') {
-          askSpec = "நிச்சயமாக! எந்த மருத்துவ துறை அல்லது எந்த மருத்துவரிடம் உங்களுக்கு ஆலோசனை வேண்டும்? (Cardiology, Pediatrics, Neurology, Orthopedics, General Medicine)";
+          askSpec = `நிச்சயமாக! எந்த மருத்துவ துறை அல்லது எந்த மருத்துவரிடம் உங்களுக்கு ஆலோசனை வேண்டும்? (${deptList})`;
         } else if (detectedLang === 'mixed') {
-          askSpec = "Sure! Entha department illa entha doctor-ah consult panna virumbureenga? (Cardiology, Pediatrics, Neurology, Orthopedics, General Medicine)";
+          askSpec = `Sure! Entha department illa entha doctor-ah consult panna virumbureenga? (${deptList})`;
         } else if (detectedLang === 'hi-IN') {
-          askSpec = "ज़रूर! आप किस विभाग या डॉक्टर से परामर्श करना चाहते हैं? (Cardiology, Pediatrics, Neurology, Orthopedics, General Medicine)";
+          askSpec = `ज़रूर! आप किस विभाग या डॉक्टर से परामर्श करना चाहते हैं? (${deptList})`;
         }
         return { replyText: askSpec, spokenReply: askSpec, detectedLanguage: detectedLang };
       }
 
+      // If user specified month-only (e.g. "I want to book an appointment with Dr. Jane Smith next month")
+      if (monthOnly && !date) {
+        const docName = doc?.name || `our ${spec} specialist`;
+        let askDate = `We have consultations available with ${docName} in ${monthOnly.monthName} ${monthOnly.year}. Which date would you prefer? (For example: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15, or ${monthOnly.monthName} 22)`;
+        if (detectedLang === 'ta-IN') {
+          askDate = `${docName} மருத்துவரிடம் ${monthOnly.monthName} ${monthOnly.year}-ல் ஆலோசனைகள் உள்ளன. நீங்கள் எந்த தேதியை விரும்புகிறீர்கள்? (உதாரணம்: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15)`;
+        } else if (detectedLang === 'mixed') {
+          askDate = `${docName}-kitta ${monthOnly.monthName} ${monthOnly.year}-la slots irukku. Entha date-la paaka virumbureenga? (Example: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15)`;
+        } else if (detectedLang === 'hi-IN') {
+          askDate = `${docName} के साथ ${monthOnly.monthName} ${monthOnly.year} में अपॉइंटमेंट उपलब्ध हैं। आप किस तारीख को आना चाहेंगे? (उदाहरण: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15)`;
+        }
+        return { replyText: askDate, spokenReply: askDate, detectedLanguage: detectedLang };
+      }
+
       if (!date) {
-        let askDate = `${spec} selected. Which date would you prefer? (e.g. Tomorrow, or a specific date)`;
+        const docLabel = doc?.name ? `${doc.name} (${spec})` : spec;
+        let askDate = `${docLabel} selected. Which date would you prefer? (e.g. Tomorrow, or a specific date)`;
         if (detectedLang === 'ta-IN') {
           askDate = `${spec} துறை தேர்ந்தெடுக்கப்பட்டது. எந்த தேதியில் நீங்கள் வர விரும்புகிறீர்கள்? (உதாரணம்: நாளை, அல்லது ஒரு குறிப்பிட்ட தேதி)`;
         } else if (detectedLang === 'mixed') {
@@ -612,6 +750,23 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
         }
         return { replyText: askDate, spokenReply: askDate, detectedLanguage: detectedLang };
       }
+
+      // If both doctor/spec and date were specified in the first sentence:
+      // Query availability and present slots immediately!
+      const availRes = await VoiceToolDispatcher.executeTool('check_doctor_availability', {
+        specialtyOrName: doc?.id || doc?.name || spec,
+        date: date
+      }, context);
+      const slots: string[] = availRes.data?.availableSlots || ['10:00 AM', '11:30 AM'];
+      this.bookingState.availableSlots = slots;
+      this.bookingState.step = 'awaiting_slot';
+
+      const docDisplay = doc?.name || `our ${spec} specialist`;
+      return {
+        replyText: `📅 **Available Slots for ${docDisplay} on ${date}:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
+        spokenReply: `Available slots for ${docDisplay} on ${date} are ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`,
+        detectedLanguage: detectedLang
+      };
     }
 
     // B. Cancel Appointment
@@ -841,56 +996,18 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
   }
 
   private matchDoctorFromText(text: string) {
-    const q = text.toLowerCase();
-    return MOCK_DOCTORS.find(d => 
-      q.includes(d.name.toLowerCase()) || 
-      q.includes(d.specialization.toLowerCase())
-    );
+    return findDoctorByQuery(text, MOCK_DOCTORS);
   }
 
   private extractSpecialty(text: string): string | undefined {
-    const q = text.toLowerCase();
-    if (q.includes('cardio') || q.includes('இதயம்') || q.includes('heart')) return 'Cardiology';
-    if (q.includes('neuro') || q.includes('மூளை') || q.includes('brain')) return 'Neurology';
-    if (q.includes('pediatric') || q.includes('child') || q.includes('குழந்தை') || q.includes('bacche')) return 'Pediatrics';
-    if (q.includes('ortho') || q.includes('bone') || q.includes('எலும்பு') || q.includes('haddi')) return 'Orthopedics';
-    if (q.includes('dent') || q.includes('tooth') || q.includes('teeth') || q.includes('பல்') || q.includes('daant')) return 'Dentistry';
-    if (q.includes('general') || q.includes('fever') || q.includes('cough') || q.includes('காய்ச்சல்') || q.includes('bukhar')) return 'General Medicine';
-    return undefined;
+    return extractSpecialty(text);
   }
 
   private parseDateFromText(text: string): string | undefined {
-    const q = text.toLowerCase();
-    if (q.includes('today') || q.includes('iniku') || q.includes('inraiku') || q.includes('இன்று') || q.includes('இன்னிக்கு') || q.includes('aaj')) {
-      return new Date().toISOString().split('T')[0];
-    }
-    if (q.includes('tomorrow') || q.includes('naalai') || q.includes('naalaikku') || q.includes('நாளை') || q.includes('நாளைக்கு') || q.includes('kal')) {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      return tomorrow.toISOString().split('T')[0];
-    }
-    const match = text.match(/\d{4}-\d{2}-\d{2}/);
-    if (match) return match[0];
-    return undefined;
+    return parseDateFromText(text, new Date(), this.bookingState.monthOnlyPreference);
   }
 
   private parseTimeFromText(text: string, availableSlots?: string[]): string {
-    const q = text.toLowerCase();
-    if (availableSlots && availableSlots.length > 0) {
-      if (q.includes('first') || q.includes('earlier') || q.includes('modhal') || q.includes('முதல்') || q.includes('pehla')) return availableSlots[0];
-      if (q.includes('second') || q.includes('later') || q.includes('aduthu') || q.includes('இரண்டாவது') || q.includes('doosra')) return availableSlots[1] || availableSlots[0];
-      const matchSlot = availableSlots.find(s => q.includes(s.toLowerCase().replace(':00', '')));
-      if (matchSlot) return matchSlot;
-    }
-
-    if (q.includes('9') || q.includes('09')) return '09:00 AM';
-    if (q.includes('10') || q.includes('பத்து') || q.includes('das')) return '10:00 AM';
-    if (q.includes('11') || q.includes('பதினொன்று') || q.includes('gyarah')) return '11:30 AM';
-    if (q.includes('12') || q.includes('பன்னிரண்டு') || q.includes('barah')) return '12:00 PM';
-    if (q.includes('1') || q.includes('01')) return '01:00 PM';
-    if (q.includes('2') || q.includes('02')) return '02:00 PM';
-    if (q.includes('3') || q.includes('03')) return '03:00 PM';
-    if (q.includes('4') || q.includes('04')) return '04:00 PM';
-    return '10:00 AM';
+    return parseTimeFromText(text, availableSlots);
   }
 }
