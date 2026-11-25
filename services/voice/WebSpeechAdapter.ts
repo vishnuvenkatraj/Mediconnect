@@ -60,6 +60,7 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
   private cancellationState: CancellationState = { inProgress: false };
   private rescheduleState: RescheduleState = { inProgress: false, step: 'idle' };
   private userIntroducedName: string | null = null;
+  private activeLanguage: VoiceLanguage = 'en-IN';
 
   constructor() {
     this.recognitionService = new SpeechRecognitionService();

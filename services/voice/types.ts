@@ -57,6 +57,8 @@ export interface VoiceToolExecutionContext {
   invoices?: Invoice[];
   onNavigate: (page: Page) => void;
   onNavigatePatientTab?: (tab: string) => void;
+  saveAppointment?: (app: Appointment) => Promise<void> | void;
+  updateAppointment?: (id: string, updates: Partial<Appointment>) => Promise<void> | void;
 }
 
 export interface VoiceToolExecutionResult {
