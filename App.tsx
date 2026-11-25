@@ -434,6 +434,9 @@ const App: React.FC = () => {
   };
 
   const handleLogout = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('mediconnect_voice_stop'));
+    }
     setCurrentUser(null);
     setCurrentPage('Home');
   }, []);
@@ -633,9 +636,22 @@ const App: React.FC = () => {
             setCurrentPage={setCurrentPage}
           />
         )}
-        {currentUser && (
+        {currentUser && !isLoginModalOpen && (
           <ErrorBoundary isolate fallbackTitle="MediBot Assistant" fallbackMessage="MediBot is temporarily unavailable.">
-            <HealthAssistant users={users} medicines={medicines} appointments={appointments} />
+            <HealthAssistant 
+              users={users} 
+              medicines={medicines} 
+              setMedicines={setMedicines}
+              appointments={appointments}
+              setAppointments={setAppointments}
+              prescriptions={prescriptions}
+              setPrescriptions={setPrescriptions}
+              labTests={labTests}
+              setLabTests={setLabTests}
+              invoices={invoices}
+              currentUser={currentUser}
+              onNavigate={navigate}
+            />
           </ErrorBoundary>
         )}
         <ErrorBoundary isolate fallbackTitle="Accessibility Assistant" fallbackMessage="Voice accessibility is temporarily disabled.">

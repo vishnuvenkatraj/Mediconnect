@@ -5,6 +5,7 @@ import BookingModal from './BookingModal';
 import ConfirmationModal from '../../components/ConfirmationModal';
 import EmptyState from '../../components/Common/EmptyState';
 import { formatDisplayDate } from '../../services/dataSanitizer';
+import MindfulCareModal from '../../components/PatientPortal/MindfulCareModal';
 
 interface AppointmentsProps {
   user: User;
@@ -22,6 +23,7 @@ const Appointments: React.FC<AppointmentsProps> = ({ user, appointments, setAppo
   
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const [isBookingModalOpen, setBookingModalOpen] = useState(false);
+  const [isMindfulCareOpen, setIsMindfulCareOpen] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState<string>('');
   const [reschedulingAppointmentId, setReschedulingAppointmentId] = useState<string | null>(null);
   const [isConfirmModalOpen, setConfirmModalOpen] = useState(false);
@@ -102,16 +104,31 @@ const Appointments: React.FC<AppointmentsProps> = ({ user, appointments, setAppo
   return (
     <div>
       <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
-        <h2 className="text-2xl font-semibold text-gray-800 dark:text-dark-text">Your Appointments</h2>
-        <button 
-          onClick={() => {
-            setReschedulingAppointmentId(null);
-            setBookingModalOpen(true);
-          }}
-          className="bg-primary text-white font-semibold py-2 px-4 rounded-lg hover:bg-primary/90 transition"
-        >
-          Book New Appointment
-        </button>
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-800 dark:text-dark-text">Your Appointments</h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Manage upcoming clinical consultations and prepare your visit questions.
+          </p>
+        </div>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            onClick={() => setIsMindfulCareOpen(true)}
+            className="bg-teal-700 hover:bg-teal-800 text-white font-semibold py-2 px-3.5 rounded-lg transition text-xs sm:text-sm flex items-center gap-1.5 shadow-sm"
+            title="Calm heart rate and organize symptoms for your doctor"
+          >
+            <span>🕊️</span>
+            <span>MindfulCare™ Prep</span>
+          </button>
+          <button 
+            onClick={() => {
+              setReschedulingAppointmentId(null);
+              setBookingModalOpen(true);
+            }}
+            className="bg-primary text-white font-semibold py-2 px-4 rounded-lg hover:bg-primary/90 transition text-xs sm:text-sm"
+          >
+            Book New Appointment
+          </button>
+        </div>
       </div>
 
       {notificationMessage && (
@@ -237,6 +254,13 @@ const Appointments: React.FC<AppointmentsProps> = ({ user, appointments, setAppo
           cancelText="No, Keep It"
         />
       )}
+
+      {/* MindfulCare Calmer & Visit Agenda Modal */}
+      <MindfulCareModal
+        isOpen={isMindfulCareOpen}
+        onClose={() => setIsMindfulCareOpen(false)}
+        user={user}
+      />
     </div>
   );
 };

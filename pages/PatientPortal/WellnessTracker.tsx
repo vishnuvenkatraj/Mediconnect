@@ -6,14 +6,17 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import EmptyState from '../../components/Common/EmptyState';
 import { formatDisplayDate } from '../../services/dataSanitizer';
 import { saveWellnessEntry as dbSaveWellnessEntry } from '../../services/database';
+import DietLifestyleGoals from './DietLifestyleGoals';
 
 interface WellnessTrackerProps {
   patientId: string;
 }
 
 type MetricType = 'bloodPressure' | 'bloodSugar' | 'weight';
+type WellnessViewTab = 'vitals' | 'lifestyle';
 
 const WellnessTracker: React.FC<WellnessTrackerProps> = ({ patientId }) => {
+  const [viewTab, setViewTab] = useState<WellnessViewTab>('vitals');
   const [entries, setEntries] = useState<WellnessEntry[]>(
     MOCK_WELLNESS_DATA.filter(e => e.patientId === patientId).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
   );
@@ -85,9 +88,48 @@ const WellnessTracker: React.FC<WellnessTrackerProps> = ({ patientId }) => {
 
   return (
     <div>
-      <h2 className="text-2xl font-semibold text-gray-800 dark:text-dark-text mb-6">Wellness Tracker</h2>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-800 dark:text-dark-text">Wellness Tracker</h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Monitor clinical vitals and correlate them with your daily circadian lifestyle habits.
+          </p>
+        </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* View Switcher */}
+        <div className="inline-flex rounded-xl bg-gray-100 dark:bg-dark-bg p-1 border border-gray-200 dark:border-dark-border self-start sm:self-auto">
+          <button
+            onClick={() => setViewTab('vitals')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              viewTab === 'vitals'
+                ? 'bg-secondary text-white shadow-sm'
+                : 'text-gray-600 dark:text-gray-300 hover:text-secondary dark:hover:text-white'
+            }`}
+          >
+            <span>📈</span>
+            <span>Clinical Vitals Graphs</span>
+          </button>
+          <button
+            onClick={() => setViewTab('lifestyle')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              viewTab === 'lifestyle'
+                ? 'bg-secondary text-white shadow-sm'
+                : 'text-gray-600 dark:text-gray-300 hover:text-secondary dark:hover:text-white'
+            }`}
+          >
+            <span>🌿</span>
+            <span>BioRhythm & Lifestyle Goals</span>
+          </button>
+        </div>
+      </div>
+
+      {viewTab === 'lifestyle' ? (
+        <DietLifestyleGoals
+          patientId={patientId}
+          onOpenWellnessVitals={() => setViewTab('vitals')}
+        />
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Form */}
         <div className="lg:col-span-1 bg-light dark:bg-dark-bg p-6 rounded-lg border dark:border-dark-border">
           <h3 className="text-lg font-bold mb-4 dark:text-white">Log New Entry</h3>
@@ -171,6 +213,7 @@ const WellnessTracker: React.FC<WellnessTrackerProps> = ({ patientId }) => {
             </div>
         </div>
       </div>
+      )}
     </div>
   );
 };

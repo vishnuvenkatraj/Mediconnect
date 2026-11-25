@@ -404,7 +404,9 @@ const initWayfinderRealtime = () => {
 const saveHospitalLocationsLocally = (locations: HospitalLocation[]) => {
   memoryLocations = locations;
   try {
-    localStorage.setItem(WAYFINDER_STORAGE_KEY, JSON.stringify(locations));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(WAYFINDER_STORAGE_KEY, JSON.stringify(locations));
+    }
   } catch (e) {
     console.error('Error saving wayfinder locations locally:', e);
   }
@@ -419,10 +421,12 @@ export const getHospitalLocations = (): HospitalLocation[] => {
   if (memoryLocations) return memoryLocations;
 
   try {
-    const raw = localStorage.getItem(WAYFINDER_STORAGE_KEY);
-    if (raw) {
-      memoryLocations = JSON.parse(raw);
-      return memoryLocations!;
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(WAYFINDER_STORAGE_KEY);
+      if (raw) {
+        memoryLocations = JSON.parse(raw);
+        return memoryLocations!;
+      }
     }
   } catch (e) {
     console.error('Error reading wayfinder locations:', e);

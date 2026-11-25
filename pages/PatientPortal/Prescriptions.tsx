@@ -1,10 +1,11 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import type { Prescription, User, Doctor } from '../../types';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import EmptyState from '../../components/Common/EmptyState';
 import { formatDisplayDate } from '../../services/dataSanitizer';
+import RxCompanionTimeline from '../../components/PatientPortal/RxCompanionTimeline';
 
 interface PrescriptionsProps {
   user: User;
@@ -13,6 +14,7 @@ interface PrescriptionsProps {
 }
 
 const Prescriptions: React.FC<PrescriptionsProps> = ({ user, prescriptions = [], doctors = [] }) => {
+  const [viewMode, setViewMode] = useState<'timeline' | 'list'>('timeline');
 
   const handleDownloadPdf = (prescription: Prescription) => {
     try {
@@ -142,44 +144,87 @@ const Prescriptions: React.FC<PrescriptionsProps> = ({ user, prescriptions = [],
 
   return (
     <div>
-      <h2 className="text-2xl font-semibold text-gray-800 dark:text-dark-text mb-6">Your Prescriptions</h2>
-      <div className="space-y-6">
-        {prescriptions.length > 0 ? (
-          prescriptions.map(p => {
-            const { borderColor, badgeColor } = getStatusInfo(p.status);
-            return (
-              <div key={p.id} className={`p-4 rounded-lg border-l-4 bg-light dark:bg-dark-bg ${borderColor}`}>
-                <div className="flex justify-between items-start flex-wrap gap-2">
-                  <div>
-                    <p className="text-lg font-bold text-gray-900 dark:text-dark-text">{p.medication} {p.dosage}</p>
-                    <p className="text-sm text-gray-600 dark:text-gray-300">
-                      {p.frequency} for {p.duration}
-                    </p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                      Prescribed by {p.doctorName} on {formatDisplayDate(p.date)}
-                    </p>
-                    {p.notes && <p className="text-xs italic text-gray-500 dark:text-gray-300 mt-2">Notes: {p.notes}</p>}
-                  </div>
-                  <div className="flex flex-col items-end gap-2">
-                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${badgeColor}`}>
-                      {p.status}
-                    </span>
-                    <button onClick={() => handleDownloadPdf(p)} className="bg-primary text-white font-semibold py-2 px-4 rounded-md text-sm hover:bg-primary/90 transition-colors">
-                      Download PDF
-                    </button>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-800 dark:text-dark-text">Your Prescriptions</h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Manage your daily doses, timing rhythms, and medication documents.
+          </p>
+        </div>
+
+        {/* View Mode Toggle */}
+        <div className="inline-flex rounded-xl bg-gray-100 dark:bg-dark-bg p-1 border border-gray-200 dark:border-dark-border self-start sm:self-auto">
+          <button
+            onClick={() => setViewMode('timeline')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              viewMode === 'timeline'
+                ? 'bg-primary text-white shadow-sm'
+                : 'text-gray-600 dark:text-gray-300 hover:text-primary dark:hover:text-white'
+            }`}
+          >
+            <span>⏱️</span>
+            <span>RxCompanion™ 24h Schedule</span>
+          </button>
+          <button
+            onClick={() => setViewMode('list')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              viewMode === 'list'
+                ? 'bg-primary text-white shadow-sm'
+                : 'text-gray-600 dark:text-gray-300 hover:text-primary dark:hover:text-white'
+            }`}
+          >
+            <span>📋</span>
+            <span>Standard List</span>
+          </button>
+        </div>
+      </div>
+
+      {viewMode === 'timeline' ? (
+        <RxCompanionTimeline
+          prescriptions={prescriptions}
+          user={user}
+          doctors={doctors}
+          onDownloadPdf={handleDownloadPdf}
+        />
+      ) : (
+        <div className="space-y-6">
+          {prescriptions.length > 0 ? (
+            prescriptions.map(p => {
+              const { borderColor, badgeColor } = getStatusInfo(p.status);
+              return (
+                <div key={p.id} className={`p-4 rounded-lg border-l-4 bg-light dark:bg-dark-bg ${borderColor}`}>
+                  <div className="flex justify-between items-start flex-wrap gap-2">
+                    <div>
+                      <p className="text-lg font-bold text-gray-900 dark:text-dark-text">{p.medication} {p.dosage}</p>
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
+                        {p.frequency} for {p.duration}
+                      </p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                        Prescribed by {p.doctorName} on {formatDisplayDate(p.date)}
+                      </p>
+                      {p.notes && <p className="text-xs italic text-gray-500 dark:text-gray-300 mt-2">Notes: {p.notes}</p>}
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <span className={`px-2 py-1 text-xs font-semibold rounded-full ${badgeColor}`}>
+                        {p.status}
+                      </span>
+                      <button onClick={() => handleDownloadPdf(p)} className="bg-primary text-white font-semibold py-2 px-4 rounded-md text-sm hover:bg-primary/90 transition-colors">
+                        Download PDF
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })
-        ) : (
-          <EmptyState
-            icon="💊"
-            title="No prescriptions found"
-            description="You have no active or completed medical prescriptions on record."
-          />
-        )}
-      </div>
+              );
+            })
+          ) : (
+            <EmptyState
+              icon="💊"
+              title="No prescriptions found"
+              description="You have no active or completed medical prescriptions on record."
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -474,6 +474,34 @@ export const processVoiceCommand = (
     return { success: true, message: speech, actionTaken: 'navigate_tab', targetTab: 'Wellness', spokenText: speech };
   }
 
+  if (query.includes('care ring') || query.includes('carering') || query.includes('family') || query.includes('beacon') || query.includes('guardian')) {
+    if (!context.currentUser || context.currentUser.role !== 'PATIENT') {
+      const msg = "Please log in as a patient to access CareRing family guardian.";
+      speakText(msg);
+      return { success: false, message: msg, actionTaken: 'unauthorized', spokenText: msg };
+    }
+    context.navigate('Patient Portal');
+    if (context.navigatePatientTab) context.navigatePatientTab('CareRing™ Guardian');
+    window.dispatchEvent(new CustomEvent('mediconnect_navigate_tab', { detail: { tab: 'CareRing™ Guardian' } }));
+    const speech = "Opening CareRing family guardian beacon.";
+    speakText(speech);
+    return { success: true, message: speech, actionTaken: 'navigate_tab', targetTab: 'CareRing™ Guardian', spokenText: speech };
+  }
+
+  if (query.includes('recovery') || query.includes('healing') || query.includes('rehab') || query.includes('roadmap')) {
+    if (!context.currentUser || context.currentUser.role !== 'PATIENT') {
+      const msg = "Please log in as a patient to view your recovery pathways.";
+      speakText(msg);
+      return { success: false, message: msg, actionTaken: 'unauthorized', spokenText: msg };
+    }
+    context.navigate('Patient Portal');
+    if (context.navigatePatientTab) context.navigatePatientTab('Recovery Roadmap');
+    window.dispatchEvent(new CustomEvent('mediconnect_navigate_tab', { detail: { tab: 'Recovery Roadmap' } }));
+    const speech = "Opening your personal Post-Care Recovery Roadmap.";
+    speakText(speech);
+    return { success: true, message: speech, actionTaken: 'navigate_tab', targetTab: 'Recovery Roadmap', spokenText: speech };
+  }
+
   // 7. PUBLIC PAGES NAVIGATION
   if (query.includes('wayfinder') || query.includes('map') || query.includes('directions') || query.includes('floor')) {
     context.navigate('WayFinder');

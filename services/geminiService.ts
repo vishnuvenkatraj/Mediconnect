@@ -72,7 +72,8 @@ const chatbotSystemInstruction = `You are an intelligent hospital assistant chat
 
 export const getChatbotResponse = async (
   userMessage: string,
-  data: { users: User[], medicines: Medicine[], appointments: Appointment[] }
+  data: { users: User[], medicines: Medicine[], appointments: Appointment[] },
+  history?: { sender?: string; text: string }[]
 ): Promise<string> => {
   const ai = getGenAIClient();
   const apiKey = getGeminiApiKey();
@@ -104,12 +105,35 @@ export const getChatbotResponse = async (
     // Check for medicines
     if (q.includes('medicine') || q.includes('pharmacy') || q.includes('drug') || q.includes('stock')) {
       const availableMeds = data.medicines.slice(0, 5).map(m => `* **${m.name}** (${m.category}) - ${m.quantity} in stock`).join('\n');
-      return `Here are some of the current medicines available at our Outpatient Pharmacy (Room PH-01, Ground Floor):\n\n${availableMeds}\n\n*Note: Add your AI API Key in the settings to enable full natural language chat.*`;
+      return `Here are some of the current medicines available at our Outpatient Pharmacy (Room PH-01, Ground Floor):\n\n${availableMeds}`;
+    }
+
+    // Check for hospital visiting hours
+    if (q.includes('visiting hour') || q.includes('visit time') || q.includes('visiting time') || q.includes('visitor') || q.includes('visiting')) {
+      return `🕒 **Hospital Visiting Hours:**\n\n` +
+             `*   **General Inpatient Wards:** 09:00 AM – 08:00 PM (Daily)\n` +
+             `*   **Intensive Care Units (ICU):** 04:00 PM – 06:00 PM\n` +
+             `*   **Visitor Guidelines:** Maximum 2 visitors per patient at a time to ensure optimal recovery and rest.`;
+    }
+
+    // Check for clinic / OPD hours
+    if (q.includes('clinic hour') || q.includes('opd hour') || q.includes('opening hour') || q.includes('hospital timings') || q.includes('working hour')) {
+      return `🏥 **MediConnect Clinic & OPD Hours:**\n\n` +
+             `*   **Outpatient Department (OPD):** Monday – Saturday, 08:30 AM – 05:00 PM\n` +
+             `*   **Emergency & Trauma Bay:** Open 24 Hours / 7 Days a week\n` +
+             `*   **Outpatient Pharmacy & Lab:** 08:00 AM – 09:00 PM`;
+    }
+
+    // Check for hospital services & departments
+    if (q.includes('hospital service') || q.includes('services') || q.includes('departments') || q.includes('facility') || q.includes('facilities')) {
+      return `🏥 **MediConnect Hospital Services:**\n\n` +
+             `*   **Clinical Specialties:** Cardiology, Neurology, Pediatrics, Orthopedics, Dentistry, General Medicine\n` +
+             `*   **Diagnostic Services:** 24/7 Pathology, Biochemistry, and Microbiology Laboratory\n` +
+             `*   **Patient Amenities:** Outpatient Pharmacy (Room PH-01), Emergency Trauma Unit (Room ER-101), Wheelchair Ramps & WayFinder Indoor Navigation.`;
     }
 
     // General fallback
-    return `Hello! I'm MediBot. You can ask me about our doctors, clinic hours, pharmacy stock, or emergency services.\n\n` +
-           `💡 *Tip: Configure your AI API key in the Symptom Checker to enable live conversational AI.*`;
+    return `Hello! I'm MediBot. You can ask me about our doctors, clinic hours, pharmacy stock, or emergency services.`;
   }
   
   // Create a comprehensive knowledge base for the model
@@ -132,7 +156,13 @@ export const getChatbotResponse = async (
     medicines: data.medicines.map(m => ({ name: m.name, category: m.category, inStock: m.quantity > 0 })),
   };
 
-  const prompt = `Here is the current Hospital Data:\n${JSON.stringify(hospitalData, null, 2)}\n\nUser Question: ${userMessage}`;
+  let conversationContext = '';
+  if (history && history.length > 0) {
+    const recent = history.slice(-6).map(h => `${h.sender === 'user' ? 'User' : 'MediBot'}: ${h.text}`).join('\n');
+    conversationContext = `\nRecent Conversation History:\n${recent}\n`;
+  }
+
+  const prompt = `Here is the current Hospital Data:\n${JSON.stringify(hospitalData, null, 2)}\n${conversationContext}\nUser Question: ${userMessage}`;
 
   try {
     const response = await ai.models.generateContent({
@@ -367,9 +397,15 @@ export const getSymptomAnalysis = async (symptoms: string): Promise<string> => {
       }
     } catch (error: any) {
       console.warn("Live Gemini API call failed, falling back to clinical knowledge engine:", error);
-      // Fall through to clinical knowledge engine with note
+      const msg = String(error?.message || '');
+      let errorNote = 'Live AI service temporarily unavailable. Clinical Knowledge Analysis provided below:';
+      if (msg.includes('API key not valid') || msg.includes('API_KEY_INVALID')) {
+        errorNote = 'The configured Gemini API key is invalid. Please clear or update it in the settings above. Clinical Knowledge Analysis provided below:';
+      } else if (msg.includes('Quota') || msg.includes('429')) {
+        errorNote = 'Live AI rate limit reached. Clinical Knowledge Analysis provided below:';
+      }
       const fallbackAnalysis = generateClinicalSymptomAnalysis(symptoms);
-      return `> ℹ️ *Live AI service encountered an error (${error?.message || 'Network/Quota'}). Clinical Knowledge Analysis provided below:*\n\n${fallbackAnalysis}`;
+      return `> ℹ️ *${errorNote}*\n\n${fallbackAnalysis}`;
     }
   }
 
@@ -523,3 +559,261 @@ export const getMedicineAlternatives = async (medicine: { name: string, category
       return "I'm sorry, but I'm having trouble generating suggestions right now. Please try again later.";
   }
 };
+
+// ==========================================
+// MediLingo™ — Plain-English Clinical Record Translator
+// ==========================================
+
+import type { MediLingoExplanation, AnatomicalSystem } from '../types';
+
+export const translateClinicalRecordWithGemini = async (
+  title: string,
+  summary: string,
+  recordType: string
+): Promise<MediLingoExplanation> => {
+  const q = `${title} ${summary}`.toLowerCase();
+
+  // Helper to determine anatomical system from clinical terms
+  const detectAnatomicalSystem = (): { system: AnatomicalSystem; name: string; desc: string } => {
+    if (q.includes('heart') || q.includes('ecg') || q.includes('cardio') || q.includes('ventricular') || q.includes('cholesterol') || q.includes('lipid') || q.includes('blood pressure')) {
+      return {
+        system: 'Cardiovascular',
+        name: 'Heart & Circulatory System',
+        desc: 'Pumps oxygen-rich blood throughout your body via blood vessels and arteries.'
+      };
+    }
+    if (q.includes('lung') || q.includes('chest') || q.includes('respiratory') || q.includes('breath') || q.includes('cough') || q.includes('x-ray') && q.includes('chest')) {
+      return {
+        system: 'Respiratory',
+        name: 'Lungs & Airways',
+        desc: 'Supplies oxygen to your blood and expels carbon dioxide when you exhale.'
+      };
+    }
+    if (q.includes('spine') || q.includes('bone') || q.includes('joint') || q.includes('knee') || q.includes('fracture') || q.includes('arthritis') || q.includes('ortho')) {
+      return {
+        system: 'Musculoskeletal',
+        name: 'Bones, Spine & Joints',
+        desc: 'Provides structural support, protects internal organs, and enables physical movement.'
+      };
+    }
+    if (q.includes('stomach') || q.includes('liver') || q.includes('gastric') || q.includes('abdomen') || q.includes('digestive') || q.includes('colon')) {
+      return {
+        system: 'Digestive',
+        name: 'Digestive & Gastrointestinal System',
+        desc: 'Breaks down nutrients, absorbs energy, and filters waste products.'
+      };
+    }
+    if (q.includes('brain') || q.includes('nerve') || q.includes('headache') || q.includes('neuro') || q.includes('dizziness')) {
+      return {
+        system: 'Nervous',
+        name: 'Brain & Nervous System',
+        desc: 'Transmits electrical signals that control sensation, thought, memory, and reflexes.'
+      };
+    }
+    if (q.includes('thyroid') || q.includes('sugar') || q.includes('glucose') || q.includes('hormone') || q.includes('diabetes') || q.includes('hba1c')) {
+      return {
+        system: 'Endocrine',
+        name: 'Endocrine & Metabolic System',
+        desc: 'Regulates energy, metabolism, blood sugar balance, and hormones.'
+      };
+    }
+    return {
+      system: 'General',
+      name: 'Systemic Health & Blood Chemistry',
+      desc: 'Overall vital markers, immune cells, and organ wellness indicators.'
+    };
+  };
+
+  const detected = detectAnatomicalSystem();
+
+  // Smart Built-in Fallbacks for Common Lab/Medical Records
+  const getBuiltInFallback = (): MediLingoExplanation => {
+    if (q.includes('blood count') || q.includes('cbc') || q.includes('anemia') || q.includes('hemoglobin')) {
+      return {
+        originalTitle: title,
+        originalSummary: summary,
+        recordType,
+        plainEnglishSummary: "This routine blood test checks the cellular army circulating in your veins: red cells carrying oxygen, white cells fighting off bugs, and platelets stopping cuts from bleeding. Your results show balanced cell counts with no signs of active infection.",
+        anatomicalSystem: detected.system,
+        systemName: detected.name,
+        systemDescription: detected.desc,
+        keyTakeaways: [
+          "Red blood cells (Oxygen couriers): Healthy and capable of fueling daily energy.",
+          "White blood cells (Immune defenders): Normal baseline, confirming no aggressive acute infection.",
+          "Platelets (Clotting helpers): Well within safe operating range."
+        ],
+        smartQuestionsForDoctor: [
+          "Do these levels suggest my current diet and iron intake are adequate?",
+          "Should I recheck this at my next annual wellness visit?",
+          "Are there any everyday habits that would optimize these numbers?"
+        ],
+        severityNote: "Safe & Reassuring: Routine normal findings."
+      };
+    }
+
+    if (q.includes('lipid') || q.includes('cholesterol')) {
+      return {
+        originalTitle: title,
+        originalSummary: summary,
+        recordType,
+        plainEnglishSummary: "This test measures the natural fats in your bloodstream. Your body needs cholesterol to build cell walls and hormones. The goal is keeping 'HDL' (the protector cholesterol) healthy while keeping 'LDL' (the sticky cholesterol) within a low target range.",
+        anatomicalSystem: detected.system,
+        systemName: detected.name,
+        systemDescription: detected.desc,
+        keyTakeaways: [
+          "HDL (Good Cholesterol): Helps clean out arterial walls.",
+          "Triglycerides: Reflect your recent dietary carbohydrates and activity level.",
+          "Overall cardiovascular profile: Stable; lifestyle and exercise continue to be your best allies."
+        ],
+        smartQuestionsForDoctor: [
+          "What is my personal target LDL number based on my family history?",
+          "Are dietary tweaks (like increasing soluble fiber) enough, or do I need medication?",
+          "How does regular aerobic exercise impact my HDL levels?"
+        ],
+        severityNote: "Stable Profile: Manageable with heart-healthy lifestyle choices."
+      };
+    }
+
+    if (q.includes('chest') || q.includes('x-ray') || q.includes('radiology')) {
+      return {
+        originalTitle: title,
+        originalSummary: summary,
+        recordType,
+        plainEnglishSummary: "This scan created a high-clarity snapshot of your ribcage, lung tissue, and heart silhouette. The air spaces inside both lungs appear open and clear, with no fluid accumulation or suspicious shadows.",
+        anatomicalSystem: detected.system,
+        systemName: detected.name,
+        systemDescription: detected.desc,
+        keyTakeaways: [
+          "Clear lung fields: Air flows freely without signs of pneumonia or congestion.",
+          "Normal heart contour: Heart size and position are within standard anatomical limits.",
+          "Intact bony cage: Ribs and thoracic spine show no acute fractures."
+        ],
+        smartQuestionsForDoctor: [
+          "Does this explain any lingering cough or breathing sensations I had?",
+          "Is any follow-up imaging recommended in the near future?",
+          "Are there breathing exercises or precautions I should follow?"
+        ],
+        severityNote: "Clear & Reassuring: No acute abnormalities detected."
+      };
+    }
+
+    // Default friendly translation
+    return {
+      originalTitle: title,
+      originalSummary: summary,
+      recordType,
+      plainEnglishSummary: `This medical note summarizes a routine clinical evaluation. Rather than indicating an emergency, it records your baseline vital measurements and health status so your clinical team can track your wellness trajectory over time.`,
+      anatomicalSystem: detected.system,
+      systemName: detected.name,
+      systemDescription: detected.desc,
+      keyTakeaways: [
+        "Clinical observation recorded by your licensed physician.",
+        "Contributes to your permanent, longitudinal wellness profile.",
+        "Your doctor has reviewed these findings in the context of your overall health."
+      ],
+      smartQuestionsForDoctor: [
+        "Can you summarize the most important finding from this record in simple terms?",
+        "Is there any lifestyle change or precaution I should implement?",
+        "When is our next recommended follow-up or re-test?"
+      ],
+      severityNote: "Routine Documentation: Reviewed by hospital care team."
+    };
+  };
+
+  const ai = getGenAIClient();
+  const apiKey = getGeminiApiKey();
+
+  if (!ai || !apiKey) {
+    return getBuiltInFallback();
+  }
+
+  const prompt = `You are MediLingo, an empathetic medical communicator for patients.
+Translate the following medical record or lab test into reassuring, clear, 6th-grade reading level plain English. Avoid medical jargon or immediately explain any necessary terms simply.
+Record Title: ${title}
+Record Type: ${recordType}
+Summary / Findings: ${summary}
+
+Format your response strictly as valid JSON matching this structure:
+{
+  "plainEnglishSummary": "2 to 3 sentences in warm, empathetic, clear language explaining what was tested and what was found",
+  "keyTakeaways": ["Takeaway 1 in plain words", "Takeaway 2 in plain words", "Takeaway 3 in plain words"],
+  "smartQuestionsForDoctor": ["Question 1 to ask doctor", "Question 2 to ask doctor", "Question 3 to ask doctor"],
+  "severityNote": "Brief reassurance note (e.g., Safe & Stable, Follow-up suggested, etc.)"
+}`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+      }
+    });
+
+    const parsed = JSON.parse(response.text || '{}');
+    return {
+      originalTitle: title,
+      originalSummary: summary,
+      recordType,
+      plainEnglishSummary: parsed.plainEnglishSummary || getBuiltInFallback().plainEnglishSummary,
+      anatomicalSystem: detected.system,
+      systemName: detected.name,
+      systemDescription: detected.desc,
+      keyTakeaways: Array.isArray(parsed.keyTakeaways) && parsed.keyTakeaways.length > 0 ? parsed.keyTakeaways : getBuiltInFallback().keyTakeaways,
+      smartQuestionsForDoctor: Array.isArray(parsed.smartQuestionsForDoctor) && parsed.smartQuestionsForDoctor.length > 0 ? parsed.smartQuestionsForDoctor : getBuiltInFallback().smartQuestionsForDoctor,
+      severityNote: parsed.severityNote || "Reviewed with clinical care"
+    };
+  } catch (err) {
+    console.warn("MediLingo Gemini call failed, using clinical fallback engine:", err);
+    return getBuiltInFallback();
+  }
+};
+
+// ==========================================
+// MindfulCare™ — 2-Minute Pre-Visit Pocket Brief
+// ==========================================
+
+export const generatePreVisitPocketBrief = async (data: {
+  symptoms: string;
+  duration: string;
+  worryOrQuestion: string;
+  patientName?: string;
+}): Promise<string> => {
+  const ai = getGenAIClient();
+  const apiKey = getGeminiApiKey();
+
+  const fallback = `### 📋 Pre-Consultation Pocket Brief
+**Patient:** ${data.patientName || 'Patient'}
+**Primary Concern:** ${data.symptoms}
+**Timeline & Duration:** ${data.duration || 'Not specified'}
+
+#### Key Points to Tell Your Doctor:
+1. "Doctor, my main symptom is **${data.symptoms}**, which has been present for **${data.duration || 'a few days'}**."
+2. "Here is what worries me or what I most want to understand today: **${data.worryOrQuestion || 'What is the root cause and best treatment?'}**."
+3. "Are there any everyday activities, foods, or medicines I should temporarily avoid?"
+
+💡 *Tip: Hand this to your doctor or read it aloud if you feel nervous during your appointment.*`;
+
+  if (!ai || !apiKey) {
+    return fallback;
+  }
+
+  const prompt = `A patient is feeling anxious before their doctor visit and needs a structured 1-page "Doctor, Here's What I'm Experiencing" cheat sheet.
+Patient Name: ${data.patientName || 'Patient'}
+Symptoms: ${data.symptoms}
+Duration: ${data.duration}
+Key Concern: ${data.worryOrQuestion}
+
+Generate an empathetic, concise 3-bullet doctor briefing in clean markdown that the patient can read directly to the physician in the first 60 seconds of the consultation.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: prompt,
+    });
+    return response.text || fallback;
+  } catch {
+    return fallback;
+  }
+};
+

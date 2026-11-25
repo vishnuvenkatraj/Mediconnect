@@ -1,11 +1,11 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { MOCK_RECORDS } from '../../constants';
 import type { MedicalRecord, User, LabTest } from '../../types';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import EmptyState from '../../components/Common/EmptyState';
 import { formatDisplayDate } from '../../services/dataSanitizer';
-
+import MediLingoModal from '../../components/PatientPortal/MediLingoModal';
 
 interface MedicalRecordsProps {
   patientId: string;
@@ -14,6 +14,14 @@ interface MedicalRecordsProps {
 }
 
 const MedicalRecords: React.FC<MedicalRecordsProps> = ({ patientId, user, labTests }) => {
+  const [selectedRecordForMediLingo, setSelectedRecordForMediLingo] = useState<{
+    title: string;
+    summary: string;
+    type: string;
+    doctorName?: string;
+    date?: string;
+  } | null>(null);
+  const [isMediLingoOpen, setIsMediLingoOpen] = useState(false);
   const combinedRecords = useMemo(() => {
     const recordsFromMocks = MOCK_RECORDS.filter(rec => rec.patientId === patientId)
         .map(rec => ({ ...rec, source: 'mock' as const, originalTest: null }));
@@ -187,19 +195,37 @@ const MedicalRecords: React.FC<MedicalRecordsProps> = ({ patientId, user, labTes
                   <td className="py-3 px-4">{rec.title}</td>
                   <td className="py-3 px-4">{rec.doctorName}</td>
                   <td className="py-3 px-4">
-                    <button 
-                      onClick={() => {
-                          if (rec.source === 'lab' && rec.originalTest) {
-                              handleDownloadLabReportPdf(rec.originalTest);
-                          } else if (rec.source === 'mock') {
-                              handleDownloadRecordPdf(rec as MedicalRecord);
-                          }
-                      }} 
-                      disabled={rec.source === 'lab' && rec.originalTest?.status !== 'Completed'}
-                      className="text-primary dark:text-blue-400 font-semibold hover:underline disabled:text-gray-400 disabled:no-underline disabled:cursor-not-allowed"
-                    >
-                      Download PDF
-                    </button>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button 
+                        onClick={() => {
+                            if (rec.source === 'lab' && rec.originalTest) {
+                                handleDownloadLabReportPdf(rec.originalTest);
+                            } else if (rec.source === 'mock') {
+                                handleDownloadRecordPdf(rec as MedicalRecord);
+                            }
+                        }} 
+                        disabled={rec.source === 'lab' && rec.originalTest?.status !== 'Completed'}
+                        className="text-primary dark:text-blue-400 font-semibold hover:underline disabled:text-gray-400 disabled:no-underline disabled:cursor-not-allowed"
+                      >
+                        Download PDF
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedRecordForMediLingo({
+                            title: rec.title,
+                            summary: rec.summary,
+                            type: rec.type,
+                            doctorName: rec.doctorName,
+                            date: rec.date
+                          });
+                          setIsMediLingoOpen(true);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900 border border-indigo-200 dark:border-indigo-800 transition"
+                        title="Demystify clinical jargon into plain English with anatomy visualizer"
+                      >
+                        <span>🧬</span> Plain English
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -217,6 +243,16 @@ const MedicalRecords: React.FC<MedicalRecordsProps> = ({ patientId, user, labTes
           </tbody>
         </table>
       </div>
+
+      {/* MediLingo Plain-English Clinical Translator Modal */}
+      <MediLingoModal
+        record={selectedRecordForMediLingo}
+        isOpen={isMediLingoOpen}
+        onClose={() => {
+          setIsMediLingoOpen(false);
+          setSelectedRecordForMediLingo(null);
+        }}
+      />
     </div>
   );
 };

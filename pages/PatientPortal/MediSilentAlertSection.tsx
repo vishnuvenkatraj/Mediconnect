@@ -12,6 +12,7 @@ import {
   stopVibration
 } from '../../services/queueService';
 import MediSilentAlertModal from '../../components/MediSilentAlert/MediSilentAlertModal';
+import MindfulCareModal from '../../components/PatientPortal/MindfulCareModal';
 
 interface MediSilentAlertSectionProps {
   user: User;
@@ -22,6 +23,7 @@ const MediSilentAlertSection: React.FC<MediSilentAlertSectionProps> = ({ user })
   const [alerts, setAlerts] = useState<SilentAlert[]>(() => getSilentAlerts(user.id));
   const [vibrationEnabled, setVibrationEnabledState] = useState<boolean>(() => getVibrationPreference());
   const [isAlertModalOpen, setIsAlertModalOpen] = useState<boolean>(false);
+  const [isMindfulCareOpen, setIsMindfulCareOpen] = useState<boolean>(false);
   const [vibrationTestFeedback, setVibrationTestFeedback] = useState<string>('');
 
   const refreshData = useCallback(() => {
@@ -156,14 +158,24 @@ const MediSilentAlertSection: React.FC<MediSilentAlertSectionProps> = ({ user })
           </p>
         </div>
 
-        {/* Quick Trigger Button */}
-        <button
-          onClick={handleSimulateYourTurn}
-          className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold py-2.5 px-5 rounded-xl shadow-md hover:shadow-lg transition-all text-sm active:scale-95"
-        >
-          <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping" />
-          Test "Your Turn" Alert
-        </button>
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            onClick={() => setIsMindfulCareOpen(true)}
+            className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-teal-700 to-cyan-700 hover:from-teal-800 hover:to-cyan-800 text-white font-semibold py-2.5 px-4 rounded-xl shadow-md hover:shadow-lg transition-all text-sm active:scale-95"
+            title="Calm heart rate with haptic breathing and organize visit questions"
+          >
+            <span>🕊️</span>
+            <span>MindfulCare™ Calmer</span>
+          </button>
+          <button
+            onClick={handleSimulateYourTurn}
+            className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold py-2.5 px-5 rounded-xl shadow-md hover:shadow-lg transition-all text-sm active:scale-95"
+          >
+            <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping" />
+            Test "Your Turn" Alert
+          </button>
+        </div>
       </div>
 
       {/* Active OPD Queue Status Card */}
@@ -422,6 +434,13 @@ const MediSilentAlertSection: React.FC<MediSilentAlertSectionProps> = ({ user })
           onAcknowledged={() => refreshData()}
         />
       )}
+
+      {/* MindfulCare Haptic Calmer & Visit Agenda Modal */}
+      <MindfulCareModal
+        isOpen={isMindfulCareOpen}
+        onClose={() => setIsMindfulCareOpen(false)}
+        user={user}
+      />
     </div>
   );
 };

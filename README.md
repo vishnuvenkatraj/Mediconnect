@@ -92,6 +92,51 @@ npm run dev
   * Analyzes complex user descriptions and flags emergency warning signs.
   * Automatically recommends the exact clinical department and links directly to one-click booking with that specific specialist.
 
+### 5. 🧬 MediLingo™ (Plain-English Clinical Translator & Interactive Anatomy Explainer)
+* **The Problem:** Diagnostic lab reports and clinical summaries are dense with confusing jargon, triggering patient panic and unguided web searching.
+* **Our Innovation:** In-portal medical translation and anatomical visualization.
+* **How It Works Differently:**
+  * Translates lab tests and clinical notes into 6th-grade reading level plain English.
+  * Features an interactive SVG anatomical body silhouette highlighting the exact system (Cardiovascular, Respiratory, Musculoskeletal, etc.) evaluated.
+  * Generates "3 Smart Questions for Your Doctor" with 1-click clipboard copy and speech synthesis read-aloud.
+
+### 6. 💊 RxCompanion™ (Circadian Chronotherapy Timeline & Food-Drug Safety Radar)
+* **The Problem:** Static medication lists don't guide patients on when or how to take medicines relative to biological clocks and meals.
+* **Our Innovation:** A 24-hour chronological timeline (Morning, Midday, Evening, Bedtime).
+* **How It Works Differently:**
+  * Categorizes prescriptions into optimal absorption time windows.
+  * Visual Food-Drug Safety Radar flags dairy exclusions, meal requirements, and photosensitivity alerts.
+  * 1-tap adherence logger with streak milestones ("🔥 5-Day Adherence Streak!").
+
+### 7. 🕊️ MindfulCare™ (White-Coat Syndrome Calmer & Pre-Visit Agenda Builder)
+* **The Problem:** Patients experience acute blood pressure and heart rate spikes ("White Coat Syndrome") in waiting rooms and forget critical symptoms in front of the doctor.
+* **Our Innovation:** Tactile relaxation and guided visit prep.
+* **How It Works Differently:**
+  * 4-4-4-4 Box Breathing visual circle synchronized with gentle device vibration pulses via the Web Vibration API.
+  * 2-minute thought organizer formats a concise "Doctor, Here Is What I'm Feeling" pocket brief to hand to the physician.
+
+### 8. 🛡️ CareRing™ (Ambient Family Guardian Beacon)
+* **The Problem:** Family caregivers wait in anxious uncertainty while patients go through hospital rooms.
+* **Our Innovation:** Ambient milestone telemetry with zero privacy invasion.
+* **How It Works Differently:**
+  * Generates a companion PIN and shareable link for family members.
+  * Broadcasts milestone pings (Check-in, Room 204 Called, In Consultation, Lab Sample, Pharmacy Ready).
+  * 1-tap "Heartbeat / I'm Doing Great ❤️" reassuring ping.
+
+### 9. 🌿 BioRhythm & Lifestyle Synergy Companion
+* **The Problem:** Health tracking often isolates clinical numbers from daily living habits.
+* **Our Innovation:** Interactive lifestyle and circadian companion.
+* **How It Works Differently:**
+  * Interactive 8-glass water tracker, circadian sleep and recovery quality slider, and diet focus selectors.
+  * Synergy engine surfaces clinical correlations (e.g. how 7+ hours of sleep directly stabilizes systolic blood pressure).
+
+### 10. 🏁 Recovery Pathways (Post-Care Healing Milestone Roadmap)
+* **The Problem:** Patients feel lost and anxious during home recovery, unable to distinguish normal healing from complications.
+* **Our Innovation:** Day-by-day interactive recovery roadmap for Cardiovascular, Orthopedic, and Respiratory pathways.
+* **How It Works Differently:**
+  * Day-by-day interactive milestone checkpoints with completion meters.
+  * Visual "Normal & Expected Healing vs. Red Flag Complications" side-by-side diagnostic safety matrix.
+
 ---
 
 ## Key Technical Features

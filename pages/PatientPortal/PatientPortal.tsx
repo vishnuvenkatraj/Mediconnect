@@ -9,6 +9,8 @@ import SymptomChecker from './SymptomChecker';
 import Prescriptions from './Prescriptions';
 import MediSilentAlertSection from './MediSilentAlertSection';
 import MediSilentAlertModal from '../../components/MediSilentAlert/MediSilentAlertModal';
+import CareRingSection from '../../components/PatientPortal/CareRingSection';
+import RecoveryPathwaysSection from '../../components/PatientPortal/RecoveryPathwaysSection';
 import { MOCK_BILLS, MOCK_RECORDS, MOCK_WELLNESS_DATA, MOCK_DOCTORS, VERIFIED_ACCESSIBILITY_FACILITIES } from '../../constants';
 import { getQueueForPatient, acknowledgeAlert } from '../../services/queueService';
 import type { QueueEntry } from '../../types';
@@ -24,7 +26,7 @@ interface PatientPortalProps {
   onNavigate?: (page: any) => void;
 }
 
-type PatientTab = 'Dashboard' | 'Appointments' | 'Live Queue' | 'Medical Records' | 'Prescriptions' | 'Billing' | 'Wellness' | 'Symptom Checker';
+type PatientTab = 'Dashboard' | 'Appointments' | 'Live Queue' | 'Medical Records' | 'Prescriptions' | 'Billing' | 'Wellness' | 'Symptom Checker' | 'CareRing™ Guardian' | 'Recovery Roadmap';
 
 const PatientDashboardSummary: React.FC<{
   user: User;
@@ -220,6 +222,18 @@ const PatientDashboardSummary: React.FC<{
                      <p className="font-bold text-lg mt-1 dark:text-white">Powered by AI</p>
                     <button onClick={() => setActiveTab('Symptom Checker')} className="mt-4 text-rose-600 dark:text-rose-400 font-semibold hover:underline">Check Symptoms</button>
                 </div>
+                <div className="bg-sky-50 dark:bg-sky-950/30 p-6 rounded-lg shadow transition-all duration-300 ease-in-out hover:shadow-xl hover:-translate-y-2 hover:scale-105 border border-sky-200 dark:border-sky-800">
+                    <h3 className="font-semibold text-sky-800 dark:text-sky-300">CareRing™ Family Guardian</h3>
+                    <p className="text-gray-600 dark:text-gray-400 mt-2">Ambient family journey telemetry & peace of mind.</p>
+                     <p className="font-bold text-lg mt-1 text-sky-600 dark:text-sky-300">Beacon Active</p>
+                    <button onClick={() => setActiveTab('CareRing™ Guardian')} className="mt-4 text-sky-600 dark:text-sky-400 font-semibold hover:underline">Open CareRing Beacon</button>
+                </div>
+                <div className="bg-purple-50 dark:bg-purple-950/30 p-6 rounded-lg shadow transition-all duration-300 ease-in-out hover:shadow-xl hover:-translate-y-2 hover:scale-105 border border-purple-200 dark:border-purple-800">
+                    <h3 className="font-semibold text-purple-800 dark:text-purple-300">Recovery Pathways</h3>
+                    <p className="text-gray-600 dark:text-gray-400 mt-2">Guided day-by-day healing roadmap & red flags.</p>
+                     <p className="font-bold text-lg mt-1 text-purple-600 dark:text-purple-300">Post-Care Roadmap</p>
+                    <button onClick={() => setActiveTab('Recovery Roadmap')} className="mt-4 text-purple-600 dark:text-purple-400 font-semibold hover:underline">View Roadmap</button>
+                </div>
             </div>
         </div>
     );
@@ -280,6 +294,10 @@ const PatientPortal: React.FC<PatientPortalProps> = ({ user, appointments, setAp
         return <BillingHistory patientId={user.id} user={user} invoices={invoices} setInvoices={setInvoices} />;
       case 'Wellness':
         return <WellnessTracker patientId={user.id} />;
+      case 'CareRing™ Guardian':
+        return <CareRingSection user={user} queueEntry={queueEntry} appointments={appointments} />;
+      case 'Recovery Roadmap':
+        return <RecoveryPathwaysSection user={user} onNavigateTab={(tab) => setActiveTab(tab as PatientTab)} />;
       case 'Symptom Checker':
         return <SymptomChecker user={user} />;
       case 'Dashboard':
@@ -301,7 +319,18 @@ const PatientPortal: React.FC<PatientPortalProps> = ({ user, appointments, setAp
     }
   };
 
-  const tabs: PatientTab[] = ['Dashboard', 'Live Queue', 'Appointments', 'Medical Records', 'Prescriptions', 'Billing', 'Wellness', 'Symptom Checker'];
+  const tabs: PatientTab[] = [
+    'Dashboard',
+    'Live Queue',
+    'CareRing™ Guardian',
+    'Appointments',
+    'Medical Records',
+    'Prescriptions',
+    'Billing',
+    'Wellness',
+    'Recovery Roadmap',
+    'Symptom Checker'
+  ];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">

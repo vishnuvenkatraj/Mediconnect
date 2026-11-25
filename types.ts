@@ -264,3 +264,104 @@ export interface WayFinderRoute {
   steps: NavigationStep[];
 }
 
+// MediLingo Clinical Translator Types
+export type AnatomicalSystem = 'Cardiovascular' | 'Respiratory' | 'Musculoskeletal' | 'Digestive' | 'Nervous' | 'Endocrine' | 'General';
+
+export interface MediLingoExplanation {
+  originalTitle: string;
+  originalSummary: string;
+  recordType: string;
+  plainEnglishSummary: string;
+  anatomicalSystem: AnatomicalSystem;
+  systemName: string;
+  systemDescription: string;
+  keyTakeaways: string[];
+  smartQuestionsForDoctor: string[];
+  severityNote?: string;
+}
+
+// RxCompanion Chronotherapy Types
+export type ChronotherapyTimeSlot = 'Morning' | 'Afternoon' | 'Evening' | 'Bedtime';
+
+export interface FoodDrugInteractionAlert {
+  type: 'warning' | 'info' | 'caution';
+  icon: string;
+  title: string;
+  instruction: string;
+}
+
+export interface ChronoMedicationItem {
+  id: string;
+  medication: string;
+  dosage: string;
+  frequency: string;
+  duration: string;
+  notes?: string;
+  prescribedBy: string;
+  slot: ChronotherapyTimeSlot;
+  timeRange: string;
+  interactionAlerts: FoodDrugInteractionAlert[];
+  isTakenToday: boolean;
+}
+
+// CareRing Ambient Guardian Types
+export interface CareRingBeacon {
+  id: string;
+  patientId: string;
+  patientName: string;
+  companionPin: string;
+  lastHeartbeatTime: string;
+  heartbeatMessage: string;
+  currentMilestone: string;
+  milestoneTime: string;
+  activeDoctorName?: string;
+  activeRoom?: string;
+  timeline: Array<{
+    id: string;
+    timestamp: string;
+    title: string;
+    description: string;
+    status: 'completed' | 'in_progress' | 'upcoming';
+    icon: string;
+  }>;
+}
+
+// Recovery Pathways Types
+export interface RecoveryMilestoneStep {
+  dayNumber: number;
+  dayLabel: string;
+  title: string;
+  description: string;
+  targetActivity: string;
+  completed: boolean;
+  normalSymptoms: string[];
+  redFlagSymptoms: string[];
+}
+
+export interface RecoveryJourney {
+  id: string;
+  category: string;
+  title: string;
+  totalDays: number;
+  currentDay: number;
+  completionPercentage: number;
+  overview: string;
+  milestones: RecoveryMilestoneStep[];
+}
+
+// BioRhythm & Lifestyle Goals Types
+export interface DailyLifestyleLog {
+  id: string;
+  patientId: string;
+  date: string;
+  waterGlasses: number; // target: 8
+  sleepHours: number;
+  sleepQuality: 'Restful' | 'Fair' | 'Restless';
+  vitalityScore: number; // 1 to 5
+  activeMinutes: number;
+  stressLevel: 'Low' | 'Moderate' | 'Elevated';
+  dietFocus: 'Balanced' | 'Low Sodium' | 'Heart-Healthy' | 'Diabetic-Friendly';
+  notes?: string;
+}
+
+
