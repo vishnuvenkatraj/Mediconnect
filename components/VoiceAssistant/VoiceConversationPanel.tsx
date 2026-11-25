@@ -31,11 +31,13 @@ export const VoiceConversationPanel: React.FC<VoiceConversationPanelProps> = ({
     const unsubState = sessionManager.subscribeState(setSessionState);
     const unsubMsgs = sessionManager.subscribeMessages(setMessages);
     const unsubTranscript = sessionManager.subscribeTranscript(setInterimTranscript);
+    const unsubLang = sessionManager.subscribeLanguage(setLanguageState);
 
     return () => {
       unsubState();
       unsubMsgs();
       unsubTranscript();
+      unsubLang();
     };
   }, [sessionManager]);
 

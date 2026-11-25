@@ -419,6 +419,7 @@ export class VoiceToolDispatcher {
       doctorId: matchedDoctor.id,
       doctorName: matchedDoctor.name,
       doctorSpecialization: matchedDoctor.specialization,
+      ...( { department: matchedDoctor.specialization } as any),
       date: bookingDate,
       time: bookingTime,
       status: 'Upcoming',
@@ -434,6 +435,15 @@ export class VoiceToolDispatcher {
     // 6. Update Application Reactive State
     if (context.setAppointments) {
       context.setAppointments(prev => [newApp, ...(prev || [])]);
+    } else if (context.appointments) {
+      context.appointments.push(newApp);
+    }
+    if ((context as any).saveAppointment) {
+      try {
+        await (context as any).saveAppointment(newApp);
+      } catch (e) {
+        console.warn('context.saveAppointment error:', e);
+      }
     }
 
     return {

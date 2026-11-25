@@ -99,11 +99,13 @@ export class SpeechSynthesisService {
                        voices.find(v => v.lang.includes('IN')) ||
                        null;
       } else if (language === 'mixed') {
-        // Tanglish: Indian English voice with natural rate
-        utterance.lang = 'en-IN';
-        matchedVoice = voices.find(v => v.lang === 'en-IN') ||
+        // Tanglish: Appropriate Tamil voice where supported, with Indian English fallback
+        matchedVoice = voices.find(v => v.lang === 'ta-IN' || v.lang.startsWith('ta')) ||
+                       voices.find(v => v.name.toLowerCase().includes('tamil') || v.name.toLowerCase().includes('valluvar')) ||
+                       voices.find(v => v.lang === 'en-IN') ||
                        voices.find(v => v.lang.includes('IN')) ||
                        null;
+        utterance.lang = matchedVoice?.lang || 'en-IN';
       } else {
         utterance.lang = 'en-IN';
         matchedVoice = voices.find(v => v.lang === 'en-IN') ||

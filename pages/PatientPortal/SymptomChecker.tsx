@@ -353,20 +353,30 @@ const SymptomChecker: React.FC<SymptomCheckerProps> = ({ user }) => {
             dangerouslySetInnerHTML={{ __html: md.render(analysis) }}
           />
 
-          {/* Direct WayFinder Link to Recommended Department */}
+          {/* Direct WayFinder Link to Recommended Department & Appointment Booking */}
           <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-blue-50/60 dark:bg-blue-950/30 p-3.5 rounded-xl border border-blue-100 dark:border-blue-900">
             <div className="text-xs text-blue-900 dark:text-blue-300">
-              <span className="font-bold">Need directions to your consultation suite?</span>
+              <span className="font-bold">Ready to consult your specialist?</span>
               <p className="text-[11px] text-blue-700 dark:text-blue-400 mt-0.5">
-                Use MediConnect WayFinder to view floor maps and wheelchair-accessible paths to doctor suites.
+                Schedule an appointment with our recommended doctor or use MediConnect WayFinder to locate consultation suites.
               </p>
             </div>
-            <a
-              href="?page=WayFinder"
-              className="text-xs font-bold px-3 py-1.5 rounded-lg bg-primary text-white hover:bg-primary/90 transition shadow-xs flex-shrink-0"
-            >
-              🧭 Open WayFinder Maps
-            </a>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('mediconnect_navigate_tab', { detail: { tab: 'Appointments' } }))}
+                className="text-xs font-bold px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs flex items-center gap-1"
+              >
+                <span>📅</span>
+                <span>Book Appointment</span>
+              </button>
+              <a
+                href="?page=WayFinder"
+                className="text-xs font-bold px-3 py-1.5 rounded-lg bg-primary text-white hover:bg-primary/90 transition shadow-xs flex-shrink-0"
+              >
+                🧭 Open WayFinder
+              </a>
+            </div>
           </div>
         </div>
       )}

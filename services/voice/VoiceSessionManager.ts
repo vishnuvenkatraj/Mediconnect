@@ -12,6 +12,7 @@ import { SarvamVoiceAdapter } from './SarvamVoiceAdapter';
 export type SessionStateListener = (state: VoiceSessionState) => void;
 export type MessageListener = (messages: VoiceMessage[]) => void;
 export type TranscriptListener = (interimTranscript: string) => void;
+export type LanguageListener = (language: VoiceLanguage) => void;
 
 export class VoiceSessionManager {
   private state: VoiceSessionState = 'idle';
@@ -28,6 +29,7 @@ export class VoiceSessionManager {
   private stateListeners: Set<SessionStateListener> = new Set();
   private messageListeners: Set<MessageListener> = new Set();
   private transcriptListeners: Set<TranscriptListener> = new Set();
+  private languageListeners: Set<LanguageListener> = new Set();
 
   constructor(config?: Partial<VoiceProviderConfig>) {
     const selectedProvider = config?.provider || 'auto';
@@ -59,6 +61,13 @@ export class VoiceSessionManager {
 
   public setLanguage(lang: VoiceLanguage): void {
     this.language = lang;
+    this.languageListeners.forEach(fn => fn(this.language));
+  }
+
+  public subscribeLanguage(listener: LanguageListener): () => void {
+    this.languageListeners.add(listener);
+    listener(this.language);
+    return () => this.languageListeners.delete(listener);
   }
 
   public isContinuousMode(): boolean {
@@ -247,6 +256,7 @@ export class VoiceSessionManager {
 
       // Preserve detected language throughout the ongoing conversation
       this.language = result.detectedLanguage;
+      this.languageListeners.forEach(fn => fn(this.language));
 
       // 3. Add Assistant Message
       const assistantMsg: VoiceMessage = {

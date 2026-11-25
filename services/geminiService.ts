@@ -179,34 +179,44 @@ export const getChatbotResponse = async (
   }
 };
 
-const symptomCheckerSystemInstruction = `You are an AI-powered symptom analysis assistant for the MediConnect platform. Your role is to analyze a user's described symptoms and provide potential insights in a structured, responsible, and safe manner.
+import { matchSymptomToSpecialist } from './voice/symptomSpecialistService';
 
-**Your response MUST be formatted as a simple markdown text and follow this structure exactly:**
+const symptomCheckerSystemInstruction = `You are an AI-powered clinical triage and symptom analysis assistant for the MediConnect platform.
+Your role is to analyze a user's described symptoms and recommend the appropriate specialist from our hospital's registered doctors.
+
+### Registered Hospital Specialists (MediConnect Source of Truth):
+1. **Cardiology:** Dr. Jane Smith (15 yrs exp, Room 102, Floor 1) - Chest pain, palpitations, hypertension, heart-related concerns.
+2. **Neurology:** Dr. Michael Brown (12 yrs exp, Room 202, Floor 2) - Headaches, migraines, dizziness, nerve pain, tremors.
+3. **Pediatrics:** Dr. Emily White (10 yrs exp, Room 104, Floor 1) - Child fever, infant/childhood illnesses, pediatric care.
+4. **Orthopedics:** Dr. Robert Green (20 yrs exp, Room 103, Floor 1) - Joint pain, knee pain, back pain, bone fractures, arthritis.
+5. **General Physician:** Dr. Ramesh Kumar (8 yrs exp, Room 101, Floor 1) - General fever, common cold, flu, viral illnesses.
+6. **Family Medicine:** Dr. Meena Raj (7 yrs exp, Room 105, Floor 1) - General family wellness, routine family checkups, preventive health.
+7. **Internal Medicine:** Dr. Arjun Das (11 yrs exp, Room 106, Floor 1) - Adult complex illnesses, chronic fatigue, metabolic disorders.
+8. **Dentistry:** Dr. Priya Sharma (9 yrs exp, Room 108, Floor 1) - Tooth pain, tooth decay, cavities, gum problems, bleeding gums.
+9. **Orthodontics:** Dr. Karan Patel (13 yrs exp, Room 109, Floor 1) - Braces, teeth alignment, crooked teeth, bite correction.
+10. **Cosmetic Dentistry:** Dr. Sneha Rao (10 yrs exp, Room 110, Floor 1) - Smile makeover, teeth whitening, aesthetic dental improvements.
+
+**CRITICAL RULES:**
+1. **ALWAYS recommend the hospital's specific doctor and department matching the patient's symptoms** (e.g. Dentistry – Dr. Priya Sharma for tooth pain; Orthopedics – Dr. Robert Green for joint/knee pain; Orthodontics – Dr. Karan Patel for teeth alignment).
+2. **DO NOT default to General Medicine / General Physician** if a suitable hospital specialist is already available!
+3. **DO NOT PROVIDE A DEFINITIVE DIAGNOSIS.** Use phrases like "Possible Considerations" or "conditions that can cause these symptoms include."
+4. **ALWAYS prioritize safety.** If symptoms indicate acute emergencies (crushing chest pain, severe shortness of breath, stroke signs), immediately advise emergency care (Room ER-101, Ground Floor or hotline 123-456-7890 / 108).
+5. **Adhere strictly to the markdown format below:**
 
 ### Possible Considerations
-Based on the symptoms described, here are a few general areas that might be relevant for discussion with a doctor. This is not a diagnosis.
-*   **Possibility 1:** A brief, high-level description.
-*   **Possibility 2:** A brief, high-level description.
-*   **Possibility 3:** A brief, high-level description.
+*   **Possibility 1:** High-level description.
+*   **Possibility 2:** High-level description.
 
 ### Recommended Specialist
-For these types of symptoms, you might consider consulting with a:
-*   **Specialist Name (e.g., General Practitioner, Cardiologist, Neurologist)**
+*   **[Department Name]: [Doctor Name] ([Room Number], [Floor])**
+    [Experience and availability summary]
 
 ### General Advice
-Here are some general wellness tips that may be helpful. They are not a substitute for professional medical advice.
-*   A piece of general, safe advice (e.g., "Ensure you are staying well-hydrated by drinking plenty of water.").
-*   Another piece of general, safe advice (e.g., "Rest is important for recovery. Try to get adequate sleep.").
+*   Safe general advice 1.
+*   Safe general advice 2.
 
 ---
 **Disclaimer: I am an AI assistant and not a medical professional. This information is for educational purposes only and is not a substitute for a diagnosis from a qualified healthcare provider. Please consult with a doctor for any medical advice or treatment. If you are experiencing severe symptoms, seek immediate medical attention.**
-
-**CRITICAL RULES:**
-1.  **DO NOT PROVIDE A DIAGNOSIS.** Use phrases like "Possible Considerations," "might be related to," or "conditions that can cause these symptoms include."
-2.  **ALWAYS prioritize safety.** If symptoms sound severe (e.g., "crushing chest pain," "difficulty breathing," "suicidal thoughts"), your FIRST and ONLY response should be to advise seeking immediate emergency medical help.
-3.  **Keep it general.** Do not suggest specific medications or treatments.
-4.  **Adhere strictly to the markdown format above.**
-5.  The final disclaimer is mandatory and must be included exactly as written.
 `;
 
 // Built-in Clinical Knowledge Base for safe, structured symptom analysis fallback
@@ -215,15 +225,16 @@ export const generateClinicalSymptomAnalysis = (symptoms: string): string => {
   
   // Emergency Red Flags
   const isEmergency = 
-    q.includes('chest pain') || 
-    q.includes('pressure in chest') || 
+    q.includes('crushing chest pain') || 
     q.includes('difficulty breathing') || 
     q.includes('cannot breathe') || 
-    q.includes('shortness of breath') || 
     q.includes('stroke') || 
     q.includes('numbness on one side') || 
     q.includes('unconscious') || 
-    q.includes('coughing blood');
+    q.includes('coughing blood') ||
+    q.includes('மாரடைப்பு') ||
+    q.includes('மூச்சு திணறல்') ||
+    q.includes('saans lene me takleef');
 
   if (isEmergency) {
     return `### 🚨 Urgent Medical Attention Recommended
@@ -231,12 +242,12 @@ export const generateClinicalSymptomAnalysis = (symptoms: string): string => {
 Your described symptoms include indicators that could require immediate evaluation by emergency care professionals.
 
 ### Possible Considerations
-*   **Acute Cardiopulmonary or Respiratory Event:** Symptoms such as chest discomfort or difficulty breathing require prompt rule-out of acute issues.
+*   **Acute Cardiopulmonary or Respiratory Event:** Symptoms such as crushing chest discomfort or severe breathing difficulty require prompt rule-out of acute emergencies.
 *   **Neurological or Vascular Symptoms:** Sudden severe weakness, numbness, or breathing distress need acute triage.
 
 ### Recommended Specialist
 *   **Emergency Medicine Department (ER-101, Ground Floor)**
-*   **Immediate Emergency Hotline:** (123) 456-7890 or local emergency services (911).
+*   **Immediate Emergency Hotline:** (123) 456-7890 or local emergency services (108 / 911).
 
 ### General Advice
 *   Do not attempt to drive yourself to the clinic; arrange immediate medical transport or call emergency services.
@@ -246,132 +257,140 @@ Your described symptoms include indicators that could require immediate evaluati
 **Disclaimer: I am an AI assistant and not a medical professional. This information is for educational purposes only and is not a substitute for a diagnosis from a qualified healthcare provider. Please consult with a doctor for any medical advice or treatment. If you are experiencing severe symptoms, seek immediate medical attention.**`;
   }
 
-  // Headache / Migraine / Neurological
-  if (q.includes('headache') || q.includes('migraine') || q.includes('head') || q.includes('dizziness')) {
+  // Use specialized clinical matching engine against all 10 registered doctors
+  const match = matchSymptomToSpecialist(symptoms);
+
+  if (match) {
+    let considerations = '';
+    let advice = '';
+
+    switch (match.department) {
+      case 'Dentistry':
+        considerations = `*   **Dental Caries or Pulpitis:** Localized bacterial decay reaching inner tooth nerve tissue, causing throbbing or sharp sensitivity.
+*   **Gingivitis or Periodontal Inflammation:** Irritation, swelling, or bleeding along the gum line due to plaque accumulation.
+*   **Dental Abscess or Periapical Sensitivity:** Localized infection requiring clinical assessment and timely treatment.`;
+        advice = `*   Rinse gently with warm salt water (1/2 teaspoon salt in a glass of warm water) to soothe oral tissues.
+*   Avoid chewing on the affected side and minimize consumption of excessively cold, hot, or sugary foods.
+*   Schedule a consultation with Dr. Priya Sharma promptly to prevent decay progression.`;
+        break;
+
+      case 'Orthodontics':
+        considerations = `*   **Dental Malocclusion or Misalignment:** Structural crowding, rotated teeth, or interdental spacing affecting bite function.
+*   **Overbite, Underbite, or Crossbite:** Skeletal or dental bite discrepancies treatable with modern aligners or braces.
+*   **Aesthetic Jaw Alignment Concern:** Functional and cosmetic alignment needs best addressed through orthodontic planning.`;
+        advice = `*   Maintain meticulous brushing and interdental flossing around contact points.
+*   Avoid biting hard objects or opening packaging with your teeth to protect tooth contact surfaces.
+*   Consult Dr. Karan Patel for digital bite scanning and customized aligner or braces planning.`;
+        break;
+
+      case 'Cosmetic Dentistry':
+        considerations = `*   **Extrinsic Enamel Discoloration:** Surface staining from dietary beverages (tea, coffee) or natural enamel maturation.
+*   **Smile Symmetry & Aesthetic Harmony:** Minor chipped enamel, uneven tooth contours, or spacing concerns.
+*   **Enamel Brightness Preference:** Safe clinical teeth whitening and aesthetic smile enhancement.`;
+        advice = `*   Limit consumption of staining liquids like coffee, tea, and dark sauces prior to evaluation.
+*   Use a soft-bristled toothbrush with gentle non-abrasive enamel toothpaste.
+*   Schedule an aesthetic consultation with Dr. Sneha Rao for professional shade evaluation.`;
+        break;
+
+      case 'Orthopedics':
+        considerations = `*   **Joint Capsule Inflammation or Arthropathy:** Repetitive motion, tendon strain, or inflammatory conditions in joint capsules (knee, shoulder, hip).
+*   **Musculoskeletal Strain or Sprain:** Overuse, sudden twist, lifting strain, or poor ergonomic posture inducing radiating joint soreness.
+*   **Cartilage Wear or Ligament Sensitivity:** Load-bearing joint fatigue often exacerbated by high impact activity.`;
+        advice = `*   Apply an ice compress for acute joint swelling within the first 48 hours, or mild warm compress for stiff chronic tension.
+*   Avoid high-impact jumping, sudden twisting movements, or heavy lifting while allowing the joint to rest.
+*   Keep the affected limb elevated when resting if joint swelling or edema is present.`;
+        break;
+
+      case 'Cardiology':
+        considerations = `*   **Cardiopulmonary Strain or Non-acute Angina:** Chest tightness, exertion-related fatigue, or pressure requiring cardiovascular rule-out.
+*   **Cardiac Dysrhythmia or Palpitations:** Sensation of racing, fluttering, or irregular heartbeats.
+*   **Elevated Blood Pressure (Hypertension):** Arterial tension elevation commonly associated with stress or vascular strain.`;
+        advice = `*   Monitor and record your resting blood pressure and pulse rate twice daily in a log.
+*   Avoid caffeine, tobacco, and intense physical exertion until cleared by your physician.
+*   Seek immediate emergency care (Room ER-101) if you develop crushing pain, sweating, or breathlessness.`;
+        break;
+
+      case 'Neurology':
+        considerations = `*   **Tension-Type Headache or Cranial Strain:** Screen fatigue, stress, cervical neck posture, or muscular tension.
+*   **Migraine with or without Aura:** Pulsating head pain accompanied by light/sound sensitivity, dizziness, or mild nausea.
+*   **Peripheral Neuropathy or Nerve Sensitivity:** Radicular nerve tingling, numbness, or cranial nerve strain.`;
+        advice = `*   Rest in a quiet, dimly lit room and apply a cool or warm compress to your forehead or neck.
+*   Ensure adequate hydration by drinking plenty of water, and avoid skipping meals or irregular sleep.
+*   Maintain a symptom diary noting duration, food triggers, and screen exposure times.`;
+        break;
+
+      case 'Pediatrics':
+        considerations = `*   **Childhood Febrile or Viral Illness:** Common pediatric viral infections frequently present with elevated temperature and irritability.
+*   **Pediatric Upper Respiratory Tract Infection:** Pharyngeal discomfort, nasal congestion, or cough in infants and children.
+*   **Pediatric Gastrointestinal Sensitivity:** Transient stomach upset, appetite changes, or viral tummy bug.`;
+        advice = `*   Ensure continuous hydration by offering frequent sips of water, oral rehydration solution, or clear broth.
+*   Monitor child body temperature every 4 hours using a reliable digital thermometer.
+*   Consult Dr. Emily White promptly if high fever persists or if the child appears unusually lethargic.`;
+        break;
+
+      case 'Family Medicine':
+        considerations = `*   **General Family Health & Preventive Wellness:** Multi-generational health maintenance and comprehensive checkup needs.
+*   **Lifestyle & Metabolic Risk Profiling:** Routine health markers including BMI, blood pressure, and wellness counseling.
+*   **Subacute Family Health Concerns:** General physical health concerns suitable for broad family medicine evaluation.`;
+        advice = `*   Keep an organized record of family medical histories, immunizations, and recent screenings.
+*   Schedule regular periodic physical wellness checks for family members.
+*   Maintain balanced nutrition, adequate hydration, and moderate daily physical activity.`;
+        break;
+
+      case 'Internal Medicine':
+        considerations = `*   **Complex Adult Systemic Condition:** Multi-system fatigue, metabolic fluctuations, or non-specific internal symptoms.
+*   **Chronic Adult Fatigue or Malaise:** Chronic low energy possibly related to metabolic, autoimmune, or endocrine factors.
+*   **Adult Diagnostic & Preventive Evaluation:** Thorough clinical examination of internal organ systems.`;
+        advice = `*   Bring all current prescription bottles, supplements, and recent lab reports to your appointment.
+*   Document daily energy fluctuations, sleep quality, and any unexplained weight changes.
+*   Ensure consistent daily fluid intake and balanced, timely meals.`;
+        break;
+
+      case 'General Physician':
+      default:
+        considerations = `*   **Viral Upper Respiratory Tract Infection:** Common colds or seasonal viral illnesses frequently present with fever, pharyngeal discomfort, and cough.
+*   **General Systemic Fatigue or Mild Viral Prodrome:** Mild nonspecific malaise following periods of sleep disruption or minor viral exposure.
+*   **Seasonal Allergies or Pharyngitis:** Inflammation of the bronchial airways or throat tissues.`;
+        advice = `*   Drink warm fluids such as herbal teas, clear broths, and plenty of water to soothe mucosal tissues.
+*   Gargle with warm salt water and get plenty of restorative sleep.
+*   Monitor your temperature twice daily and rest comfortably.`;
+        break;
+    }
+
     return `### Possible Considerations
-Based on the symptoms described, here are a few general areas that might be relevant for discussion with a doctor. This is not a diagnosis.
-*   **Tension-Type Headache:** Often associated with muscle strain, screen fatigue, stress, or posture.
-*   **Migraine with or without Aura:** May involve pulsating pain, sensitivity to bright lights or loud sounds, and occasional nausea.
-*   **Dehydration or Sinus Strain:** Insufficient hydration or upper respiratory congestion can cause frontal or bilateral head pressure.
+Based on the symptoms described, here are general areas relevant for clinical discussion with a physician. This is not a diagnosis.
+${considerations}
 
 ### Recommended Specialist
-For these types of symptoms, you might consider consulting with a:
-*   **General Practitioner (Room 101, Floor 1) or Neurologist (Room 202 - Dr. Michael Brown, Floor 2)**
+For these types of symptoms, our hospital recommends consulting with:
+*   **${match.department} Specialist: ${match.doctorName} (${match.roomNumber}, ${match.floor})**
+    *Experience:* ${match.doctorExperience} years | *Availability:* ${match.doctorAvailability}
 
 ### General Advice
 Here are some general wellness tips that may be helpful. They are not a substitute for professional medical advice.
-*   Rest in a quiet, dimly lit room and apply a cool or warm compress to your forehead or neck.
-*   Ensure adequate hydration by drinking plenty of water, and avoid skipping meals or sudden caffeine withdrawal.
-*   Keep a brief symptom diary noting duration, triggers, and any vision changes.
+${advice}
 
 ---
 **Disclaimer: I am an AI assistant and not a medical professional. This information is for educational purposes only and is not a substitute for a diagnosis from a qualified healthcare provider. Please consult with a doctor for any medical advice or treatment. If you are experiencing severe symptoms, seek immediate medical attention.**`;
   }
 
-  // Respiratory / Fever / Cold / Cough / Sore Throat
-  if (q.includes('fever') || q.includes('cough') || q.includes('sore throat') || q.includes('cold') || q.includes('flu') || q.includes('chills')) {
-    return `### Possible Considerations
-Based on the symptoms described, here are a few general areas that might be relevant for discussion with a doctor. This is not a diagnosis.
-*   **Viral Upper Respiratory Tract Infection:** Common colds or seasonal viral illnesses frequently present with fever, pharyngeal discomfort, and cough.
-*   **Acute Bronchitis or Pharyngitis:** Inflammation of the bronchial airways or throat tissues, occasionally requiring clinical differentiation from bacterial causes.
-*   **Seasonal Allergies or Sinusitis:** Can lead to post-nasal drip, dry coughing, and general fatigue.
-
-### Recommended Specialist
-For these types of symptoms, you might consider consulting with a:
-*   **General Physician (Room 101, Floor 1) or ENT Specialist (Room 104, Floor 1)**
-
-### General Advice
-Here are some general wellness tips that may be helpful. They are not a substitute for professional medical advice.
-*   Drink warm fluids such as herbal teas, clear broths, and plenty of water to maintain hydration and soothe mucosal tissues.
-*   Gargle with warm salt water and use a clean room humidifier to reduce throat irritation.
-*   Get plenty of restorative sleep and monitor your temperature twice daily.
-
----
-**Disclaimer: I am an AI assistant and not a medical professional. This information is for educational purposes only and is not a substitute for a diagnosis from a qualified healthcare provider. Please consult with a doctor for any medical advice or treatment. If you are experiencing severe symptoms, seek immediate medical attention.**`;
-  }
-
-  // Gastrointestinal / Stomach / Nausea / Abdominal
-  if (q.includes('stomach') || q.includes('nausea') || q.includes('vomit') || q.includes('diarrhea') || q.includes('belly') || q.includes('abdomen') || q.includes('acid') || q.includes('heartburn')) {
-    return `### Possible Considerations
-Based on the symptoms described, here are a few general areas that might be relevant for discussion with a doctor. This is not a diagnosis.
-*   **Acute Gastroenteritis:** Temporary irritation of the stomach and intestines, often due to food sensitivity or viral agents.
-*   **Gastric Acidity or Dyspepsia:** Acid reflux or gastroesophageal irritation commonly presents with burning discomfort or upset stomach.
-*   **Dietary Intolerance or IBS:** Irritable bowel sensitivities to specific foods or stress.
-
-### Recommended Specialist
-For these types of symptoms, you might consider consulting with a:
-*   **General Practitioner (Room 101, Floor 1) or Gastroenterologist (Consultation Suites, Floor 2)**
-
-### General Advice
-Here are some general wellness tips that may be helpful. They are not a substitute for professional medical advice.
-*   Eat small, bland meals (e.g. bananas, rice, applesauce, toast) and avoid spicy, greasy, or acidic foods.
-*   Sip electrolyte rehydration solutions or water slowly throughout the day.
-*   Avoid lying down immediately after eating and keep elevated if experiencing reflux.
-
----
-**Disclaimer: I am an AI assistant and not a medical professional. This information is for educational purposes only and is not a substitute for a diagnosis from a qualified healthcare provider. Please consult with a doctor for any medical advice or treatment. If you are experiencing severe symptoms, seek immediate medical attention.**`;
-  }
-
-  // Musculoskeletal / Joint / Back / Muscle Pain
-  if (q.includes('joint') || q.includes('back') || q.includes('muscle') || q.includes('knee') || q.includes('sprain') || q.includes('ache')) {
-    return `### Possible Considerations
-Based on the symptoms described, here are a few general areas that might be relevant for discussion with a doctor. This is not a diagnosis.
-*   **Musculoskeletal Strain or Sprain:** Overuse, lifting strain, or poor ergonomic posture frequently causes localized muscular tension.
-*   **Joint Inflammation or Arthropathy:** Repetitive motion, tendon strain, or inflammatory conditions in joint capsules.
-*   **Ergonomic Postural Fatigue:** Prolonged sitting or unsupportive footwear can induce radiating back or lower limb soreness.
-
-### Recommended Specialist
-For these types of symptoms, you might consider consulting with a:
-*   **Orthopedic Specialist (Room 103, Floor 1) or Physical Therapist**
-
-### General Advice
-Here are some general wellness tips that may be helpful. They are not a substitute for professional medical advice.
-*   Apply ice packs for acute swelling within the first 48 hours, or mild warm compresses for stiff chronic muscular tension.
-*   Avoid heavy lifting or sudden twisting movements while allowing the affected area to rest.
-*   Practice gentle mobility stretches within a comfortable, pain-free range of motion.
-
----
-**Disclaimer: I am an AI assistant and not a medical professional. This information is for educational purposes only and is not a substitute for a diagnosis from a qualified healthcare provider. Please consult with a doctor for any medical advice or treatment. If you are experiencing severe symptoms, seek immediate medical attention.**`;
-  }
-
-  // Dermatological / Skin / Rash / Itch
-  if (q.includes('skin') || q.includes('rash') || q.includes('itch') || q.includes('allergy') || q.includes('hives')) {
-    return `### Possible Considerations
-Based on the symptoms described, here are a few general areas that might be relevant for discussion with a doctor. This is not a diagnosis.
-*   **Contact Dermatitis or Allergic Reaction:** Exposure to new soaps, detergents, cosmetics, fabrics, or environmental allergens.
-*   **Eczema or Xerosis:** Dry skin barrier irritation compounded by seasonal humidity shifts or warm showers.
-*   **Urticaria (Hives):** Transient raised pruritic welts triggered by stress, dietary allergens, or viral reactions.
-
-### Recommended Specialist
-For these types of symptoms, you might consider consulting with a:
-*   **Dermatologist (Room 105 - Dr. Ramesh Kumar, Floor 1)**
-
-### General Advice
-Here are some general wellness tips that may be helpful. They are not a substitute for professional medical advice.
-*   Avoid scratching the affected area to prevent secondary bacterial infection; keep nails trimmed.
-*   Use mild, fragrance-free moisturizers and avoid harsh antibacterial soaps or hot water baths.
-*   Wear loose, breathable cotton clothing to minimize friction against sensitive skin.
-
----
-**Disclaimer: I am an AI assistant and not a medical professional. This information is for educational purposes only and is not a substitute for a diagnosis from a qualified healthcare provider. Please consult with a doctor for any medical advice or treatment. If you are experiencing severe symptoms, seek immediate medical attention.**`;
-  }
-
-  // General / Fatigue / Default Comprehensive Medical Analysis
+  // General fallback when symptoms are non-specific
   return `### Possible Considerations
 Based on the symptoms described, here are a few general areas that might be relevant for discussion with a doctor. This is not a diagnosis.
-*   **General Systemic Fatigue or Mild Viral Prodrome:** Mild nonspecific malaise can occur following periods of sleep disruption, physical stress, or minor viral exposure.
-*   **Nutritional or Hydration Imbalance:** Inadequate water intake, low dietary electrolytes, or irregular eating patterns.
-*   **Stress-Related Physical Manifestation:** Psychosomatic or physical responses to elevated occupational or emotional stress.
+*   **General Systemic Fatigue or Mild Viral Prodrome:** Mild nonspecific malaise can occur following physical stress or seasonal changes.
+*   **Nutritional or Hydration Imbalance:** Inadequate water intake or irregular eating patterns.
+*   **Nonspecific Outpatient Symptoms:** Broad concerns suitable for outpatient medical evaluation.
 
 ### Recommended Specialist
-For these types of symptoms, you might consider consulting with a:
-*   **General Practitioner / Family Physician (Room 101, Floor 1)**
+For general health concerns, you can consult:
+*   **General Physician: Dr. Ramesh Kumar (Room 101, Floor 1)**
+    *Experience:* 8 years | *Availability:* Mon - Sat (9 AM - 5 PM)
 
 ### General Advice
-Here are some general wellness tips that may be helpful. They are not a substitute for professional medical advice.
+Here are some general wellness tips:
 *   Ensure you are maintaining consistent hydration by drinking 2 to 2.5 liters of clean water daily.
 *   Prioritize 7-8 hours of uninterrupted, restful sleep in a dark, quiet environment.
-*   Document the timing, frequency, and severity of your symptoms to share during your clinical consultation.
+*   Document the timing and severity of your symptoms to share during your clinical consultation.
 
 ---
 **Disclaimer: I am an AI assistant and not a medical professional. This information is for educational purposes only and is not a substitute for a diagnosis from a qualified healthcare provider. Please consult with a doctor for any medical advice or treatment. If you are experiencing severe symptoms, seek immediate medical attention.**`;

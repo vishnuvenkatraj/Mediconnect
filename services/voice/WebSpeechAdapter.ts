@@ -19,10 +19,11 @@ import {
   parseTimeFromText,
   type MonthPreference
 } from './doctorDateParser';
+import { matchSymptomToSpecialist } from './symptomSpecialistService';
 
 interface ProgressiveBookingState {
   inProgress: boolean;
-  step: 'awaiting_spec' | 'awaiting_date' | 'awaiting_slot' | 'awaiting_confirmation' | 'idle';
+  step: 'awaiting_booking_consent' | 'awaiting_spec' | 'awaiting_date' | 'awaiting_slot' | 'awaiting_confirmation' | 'idle';
   doctorSpec?: string;
   doctorName?: string;
   doctorId?: string;
@@ -30,6 +31,7 @@ interface ProgressiveBookingState {
   availableSlots?: string[];
   time?: string;
   monthOnlyPreference?: MonthPreference;
+  symptomTriggered?: boolean;
 }
 
 interface CancellationState {
@@ -101,7 +103,34 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
     toolCallResult?: VoiceToolExecutionResult;
   }> {
     const detectedLang = this.detectLanguage(transcript, language);
+    this.activeLanguage = detectedLang;
     const q = transcript.toLowerCase().trim();
+
+    // =============================================================
+    // 0. EXPLICIT LANGUAGE SWITCHING COMMANDS
+    // =============================================================
+    const isLanguageSwitchRequest =
+      q.includes('speak in ') || q.includes('switch to ') || q.includes('talk in ') ||
+      q.includes('தமிழில் பேசு') || q.includes('தமிழ் பேசு') || q.includes('tamil-la pesu') ||
+      q.includes('tamil-la pesunga') || q.includes('தமிழ் பேசவும்') ||
+      q.includes('हिंदी में बोलो') || q.includes('hindi me bolo') || q.includes('hindi me baat') ||
+      q.includes('tanglish-la pesu') || q.includes('tanglish-la pesunga');
+
+    if (isLanguageSwitchRequest) {
+      let switchReply = "Certainly! I will now speak in English. How can I assist you today?";
+      if (detectedLang === 'ta-IN') {
+        switchReply = "சரி! நான் இனி தமிழில் உரையாடுகிறேன். உங்களுக்கு எவ்வாறு உதவ வேண்டும்?";
+      } else if (detectedLang === 'mixed') {
+        switchReply = "Sure! Ippo naan Tanglish-la pesren. Ungalukku hospital-la enna help venum?";
+      } else if (detectedLang === 'hi-IN') {
+        switchReply = "ज़रूर! मैं अब हिन्दी में बातचीत करूँगा। मैं आपकी क्या मदद करूँ?";
+      }
+      return {
+        replyText: switchReply,
+        spokenReply: switchReply,
+        detectedLanguage: detectedLang
+      };
+    }
 
     // =============================================================
     // 1. MEDICAL SAFETY GUARDRAILS (Highest Priority Interception)
@@ -109,7 +138,7 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
 
     // Emergency Detection: Immediate ER Protocol
     const isEmergency = 
-      q.includes('emergency') || q.includes('heart attack') || q.includes('chest pain') ||
+      q.includes('emergency') || q.includes('heart attack') || q.includes('crushing chest pain') ||
       q.includes('difficulty breathing') || q.includes('cannot breathe') || q.includes('stroke') ||
       q.includes('unconscious') || q.includes('bleeding heavily') || q.includes('suicide') ||
       q.includes('மாரடைப்பு') || q.includes('மூச்சு திணறல்') || q.includes('அவசரம்');
@@ -379,14 +408,83 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
       // A. Cancellation / Abort
       if (q.includes('cancel') || q.includes('stop') || q.includes('never mind') || q.includes('vendaam') || q.includes('nahi chahiye')) {
         this.bookingState = { inProgress: false, step: 'idle' };
-        const msg = "Appointment booking has been cancelled. How else can I assist you?";
+        let msg = "Appointment booking has been cancelled. How else can I assist you?";
+        if (detectedLang === 'ta-IN') {
+          msg = "முன்பதிவு ரத்து செய்யப்பட்டது. உங்களுக்கு வேறு ஏதேனும் உதவி தேவையா?";
+        } else if (detectedLang === 'mixed') {
+          msg = "Appointment booking cancel aayiduchu. Vera edhavadhu help venuma?";
+        } else if (detectedLang === 'hi-IN') {
+          msg = "अपॉइंटमेंट बुकिंग रद्द कर दी गई है। क्या मैं आपकी कोई और मदद कर सकता हूँ?";
+        }
         return { replyText: msg, spokenReply: msg, detectedLanguage: detectedLang };
+      }
+
+      // Step: Awaiting Booking Consent (After Symptom Recommendation)
+      if (this.bookingState.step === 'awaiting_booking_consent') {
+        const isAffirmative =
+          q.includes('yes') || q.includes('sure') || q.includes('aama') || q.includes('haan') ||
+          q.includes('book') || q.includes('confirm') || q.includes('ok') || q.includes('seri') ||
+          q.includes('kandippa') || q.includes('correct') || q.includes('ஆம்') || q.includes('சரி') ||
+          q.includes('உறுதி') || q.includes('हाँ') || q.includes('जी हाँ');
+
+        if (isAffirmative) {
+          if (this.bookingState.date) {
+            this.bookingState.step = 'awaiting_slot';
+            const availRes = await VoiceToolDispatcher.executeTool('check_doctor_availability', {
+              specialtyOrName: this.bookingState.doctorId || this.bookingState.doctorName,
+              date: this.bookingState.date
+            }, context);
+            const slots: string[] = availRes.data?.availableSlots || ['10:00 AM', '11:30 AM'];
+            this.bookingState.availableSlots = slots;
+
+            let reply = `📅 **Available Slots for ${this.bookingState.doctorName} on ${this.bookingState.date}:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`;
+            let spoken = `Available slots for ${this.bookingState.doctorName} on ${this.bookingState.date} are ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+
+            if (detectedLang === 'ta-IN') {
+              reply = `📅 **${this.bookingState.doctorName} மருத்துவரிடம் ${this.bookingState.date} அன்று கிடைக்கும் நேரங்கள்:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?*`;
+              spoken = `${this.bookingState.date} அன்று ${slots.slice(0, 2).join(' மற்றும் ')} ஆகிய நேரங்கள் உள்ளன. எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?`;
+            } else if (detectedLang === 'mixed') {
+              reply = `📅 **${this.bookingState.doctorName}-kitta ${this.bookingState.date} Slots:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Endha slot ungalukku venum?*`;
+              spoken = `${this.bookingState.date}-la ${slots.slice(0, 2).join(' and ')} available-ah irukku. Endha time ungalukku venum?`;
+            } else if (detectedLang === 'hi-IN') {
+              reply = `📅 **${this.bookingState.doctorName} के साथ ${this.bookingState.date} को उपलब्ध स्लॉट:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*आप कौन सा समय पसंद करेंगे?*`;
+              spoken = `${this.bookingState.date} को उपलब्ध समय: ${slots.slice(0, 2).join(' और ')}। आप कौन सा समय पसंद करेंगे?`;
+            }
+
+            return { replyText: reply, spokenReply: spoken, detectedLanguage: detectedLang };
+          } else {
+            this.bookingState.step = 'awaiting_date';
+            let askDate = `Which date would you prefer with ${this.bookingState.doctorName}? (e.g. Tomorrow, next Friday, or a specific date like December 15)`;
+            if (detectedLang === 'ta-IN') {
+              askDate = `${this.bookingState.doctorName} மருத்துவரிடம் எந்த தேதியில் நீங்கள் வர விரும்புகிறீர்கள்? (உதாரணம்: நாளை, அல்லது ஒரு குறிப்பிட்ட தேதி)`;
+            } else if (detectedLang === 'mixed') {
+              askDate = `Endha date-ku appointment venum? (Example: Naalaikku, or specific date like December 15)`;
+            } else if (detectedLang === 'hi-IN') {
+              askDate = `आप ${this.bookingState.doctorName} के साथ किस तारीख को आना चाहेंगे? (उदाहरण: कल, या कोई विशेष तारीख)`;
+            }
+            return { replyText: askDate, spokenReply: askDate, detectedLanguage: detectedLang };
+          }
+        }
+
+        if (q.includes('no') || q.includes('vendaam') || q.includes('nahi') || q.includes('not now') || q.includes('இல்லை') || q.includes('வேண்டாம்') || q.includes('नहीं')) {
+          this.bookingState = { inProgress: false, step: 'idle' };
+          let msg = "Understood! Let me know if you need any other assistance or information about our doctors.";
+          if (detectedLang === 'ta-IN') {
+            msg = "சரி! உங்களுக்கு வேறு ஏதேனும் உதவி தேவைப்பட்டால் தயங்காமல் கேட்கவும்.";
+          } else if (detectedLang === 'mixed') {
+            msg = "Seri! Vera edhavadhu hospital assistance venumna sollunga.";
+          } else if (detectedLang === 'hi-IN') {
+            msg = "ठीक है! यदि आपको किसी अन्य सहायता की आवश्यकता हो, तो कृपया बताएं।";
+          }
+          return { replyText: msg, spokenReply: msg, detectedLanguage: detectedLang };
+        }
       }
 
       // Step: Awaiting Department / Doctor Selection
       if (this.bookingState.step === 'awaiting_spec') {
-        const doc = findDoctorByQuery(q, MOCK_DOCTORS);
-        const spec = doc ? doc.specialization : extractSpecialty(q);
+        const sMatch = matchSymptomToSpecialist(q);
+        const doc = findDoctorByQuery(q, MOCK_DOCTORS) || (sMatch ? MOCK_DOCTORS.find(d => d.id === sMatch.doctorId) : undefined);
+        const spec = doc ? doc.specialization : (sMatch ? sMatch.department : extractSpecialty(q));
 
         if (spec) {
           const matchedDoc = doc || MOCK_DOCTORS.find(d => d.specialization === spec);
@@ -409,28 +507,57 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
             this.bookingState.availableSlots = slots;
             this.bookingState.step = 'awaiting_slot';
 
-            return {
-              replyText: `📅 **Available Slots for ${this.bookingState.doctorName} on ${date}:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
-              spokenReply: `Available slots for ${this.bookingState.doctorName} on ${date} are ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`,
-              detectedLanguage: detectedLang
-            };
+            let reply = `📅 **Available Slots for ${this.bookingState.doctorName} on ${date}:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`;
+            let spoken = `Available slots for ${this.bookingState.doctorName} on ${date} are ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+
+            if (detectedLang === 'ta-IN') {
+              reply = `📅 **${this.bookingState.doctorName} மருத்துவரிடம் ${date} அன்று கிடைக்கும் நேரங்கள்:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?*`;
+              spoken = `${date} அன்று ${slots.slice(0, 2).join(' மற்றும் ')} ஆகிய நேரங்கள் உள்ளன. எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?`;
+            } else if (detectedLang === 'mixed') {
+              reply = `📅 **${this.bookingState.doctorName}-kitta ${date} Slots:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Endha slot ungalukku venum?*`;
+              spoken = `${date}-la ${slots.slice(0, 2).join(' and ')} available-ah irukku. Endha time ungalukku venum?`;
+            } else if (detectedLang === 'hi-IN') {
+              reply = `📅 **${this.bookingState.doctorName} के साथ ${date} को उपलब्ध स्लॉट:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*आप कौन सा समय पसंद करेंगे?*`;
+              spoken = `${date} को उपलब्ध समय: ${slots.slice(0, 2).join(' और ')}। आप कौन सा समय पसंद करेंगे?`;
+            }
+
+            return { replyText: reply, spokenReply: spoken, detectedLanguage: detectedLang };
           }
 
           if (monthOnly) {
             this.bookingState.monthOnlyPreference = monthOnly;
             const docLabel = this.bookingState.doctorName;
-            const msg = `We have consultations available with ${docLabel} in ${monthOnly.monthName} ${monthOnly.year}. Which date would you prefer? (For example: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15, or ${monthOnly.monthName} 22)`;
+            let msg = `We have consultations available with ${docLabel} in ${monthOnly.monthName} ${monthOnly.year}. Which date would you prefer? (For example: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15, or ${monthOnly.monthName} 22)`;
+            if (detectedLang === 'ta-IN') {
+              msg = `${docLabel} மருத்துவரிடம் ${monthOnly.monthName} ${monthOnly.year}-ல் ஆலோசனைகள் உள்ளன. நீங்கள் எந்த தேதியை விரும்புகிறீர்கள்? (உதாரணம்: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15)`;
+            } else if (detectedLang === 'mixed') {
+              msg = `${docLabel}-kitta ${monthOnly.monthName} ${monthOnly.year}-la slots irukku. Entha date-la paaka virumbureenga? (Example: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15)`;
+            } else if (detectedLang === 'hi-IN') {
+              msg = `${docLabel} के साथ ${monthOnly.monthName} ${monthOnly.year} में अपॉइंटमेंट उपलब्ध हैं। आप किस तारीख को आना चाहेंगे? (उदाहरण: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15)`;
+            }
             return { replyText: msg, spokenReply: msg, detectedLanguage: detectedLang };
           }
 
           const docLabel = matchedDoc ? `${matchedDoc.name} (${spec})` : spec;
-          const askDate = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
-            ? `${spec} துறை தேர்ந்தெடுக்கப்பட்டது. எந்த தேதியில் நீங்கள் வர விரும்புகிறீர்கள்? (உதாரணம்: நாளை, அல்லது ஒரு குறிப்பிட்ட தேதி)`
-            : `${docLabel} selected. Which date would you prefer? (e.g. Tomorrow, next Friday, or a specific date like December 15)`;
+          let askDate = `${docLabel} selected. Which date would you prefer? (e.g. Tomorrow, next Friday, or a specific date like December 15)`;
+          if (detectedLang === 'ta-IN') {
+            askDate = `${spec} துறை தேர்ந்தெடுக்கப்பட்டது. ${docLabel} மருத்துவரிடம் எந்த தேதியில் நீங்கள் வர விரும்புகிறீர்கள்? (உதாரணம்: நாளை, அல்லது ஒரு குறிப்பிட்ட தேதி)`;
+          } else if (detectedLang === 'mixed') {
+            askDate = `${docLabel} select aachu. Entha date-la paaka virumbureenga? (Example: Naalaikku, or specific date)`;
+          } else if (detectedLang === 'hi-IN') {
+            askDate = `${spec} चुन लिया गया है। आप ${docLabel} के साथ किस तारीख को आना चाहेंगे? (उदाहरण: कल, या कोई विशेष तारीख)`;
+          }
           return { replyText: askDate, spokenReply: askDate, detectedLanguage: detectedLang };
         } else {
           const deptList = getAllDepartments(MOCK_DOCTORS).join(', ');
-          const askAgain = `Which department or doctor would you like to consult? Available: ${deptList}.`;
+          let askAgain = `Which department or doctor would you like to consult? Available: ${deptList}.`;
+          if (detectedLang === 'ta-IN') {
+            askAgain = `எந்த மருத்துவ துறை அல்லது மருத்துவரிடம் ஆலோசனை பெற விரும்புகிறீர்கள்? கிடைக்கும் துறைகள்: ${deptList}.`;
+          } else if (detectedLang === 'mixed') {
+            askAgain = `Endha department illa doctor-ah consult panna virumbureenga? Available: ${deptList}.`;
+          } else if (detectedLang === 'hi-IN') {
+            askAgain = `आप किस विभाग या डॉक्टर से परामर्श लेना चाहेंगे? उपलब्ध विभाग: ${deptList}।`;
+          }
           return { replyText: askAgain, spokenReply: askAgain, detectedLanguage: detectedLang };
         }
       }
@@ -446,11 +573,14 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
           this.bookingState.doctorSpec = changedDoc.specialization; // Remap department correctly!
 
           if (!parseDateFromText(q) && !detectMonthOnly(q)) {
-            const askNewDate = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
-              ? `மருத்துவர் ${changedDoc.name} (${changedDoc.specialization}) தேர்ந்தெடுக்கப்பட்டார். எந்த தேதியில் நீங்கள் வர விரும்புகிறீர்கள்?`
-              : detectedLang === 'hi-IN'
-              ? `डॉक्टर बदलकर ${changedDoc.name} (${changedDoc.specialization}) कर दिया गया है। आप किस तारीख को आना चाहेंगे?`
-              : `Doctor changed to ${changedDoc.name} (${changedDoc.specialization}). Which date would you prefer? (You can say Tomorrow, next Friday, or a specific date like December 15)`;
+            let askNewDate = `Doctor changed to ${changedDoc.name} (${changedDoc.specialization}). Which date would you prefer? (You can say Tomorrow, next Friday, or a specific date like December 15)`;
+            if (detectedLang === 'ta-IN') {
+              askNewDate = `மருத்துவர் ${changedDoc.name} (${changedDoc.specialization}) தேர்ந்தெடுக்கப்பட்டார். எந்த தேதியில் நீங்கள் வர விரும்புகிறீர்கள்?`;
+            } else if (detectedLang === 'mixed') {
+              askNewDate = `Doctor changed to ${changedDoc.name} (${changedDoc.specialization}). Entha date-ku appointment venum?`;
+            } else if (detectedLang === 'hi-IN') {
+              askNewDate = `डॉक्टर बदलकर ${changedDoc.name} (${changedDoc.specialization}) कर दिया गया है। आप किस तारीख को आना चाहेंगे?`;
+            }
             return { replyText: askNewDate, spokenReply: askNewDate, detectedLanguage: detectedLang };
           }
         }
@@ -460,7 +590,14 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
         if (monthOnly) {
           this.bookingState.monthOnlyPreference = monthOnly;
           const docName = this.bookingState.doctorName || 'our specialist';
-          const msg = `We have consultations available with ${docName} in ${monthOnly.monthName} ${monthOnly.year}. Which date would you prefer? (For example: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15, or ${monthOnly.monthName} 22)`;
+          let msg = `We have consultations available with ${docName} in ${monthOnly.monthName} ${monthOnly.year}. Which date would you prefer? (For example: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15, or ${monthOnly.monthName} 22)`;
+          if (detectedLang === 'ta-IN') {
+            msg = `${docName} மருத்துவரிடம் ${monthOnly.monthName} ${monthOnly.year}-ல் ஆலோசனைகள் உள்ளன. நீங்கள் எந்த தேதியை விரும்புகிறீர்கள்? (உதாரணம்: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15)`;
+          } else if (detectedLang === 'mixed') {
+            msg = `${docName}-kitta ${monthOnly.monthName} ${monthOnly.year}-la slots irukku. Entha date-la paaka virumbureenga? (Example: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15)`;
+          } else if (detectedLang === 'hi-IN') {
+            msg = `${docName} के साथ ${monthOnly.monthName} ${monthOnly.year} में अपॉइंटमेंट उपलब्ध हैं। आप किस तारीख को आना चाहेंगे? (उदाहरण: ${monthOnly.monthName} 5, ${monthOnly.monthName} 15)`;
+          }
           return { replyText: msg, spokenReply: msg, detectedLanguage: detectedLang };
         }
 
@@ -480,24 +617,42 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
           this.bookingState.step = 'awaiting_slot';
 
           if (slots.length === 0) {
-            const noSlots = `Sorry, ${this.bookingState.doctorName} has no available slots on ${resolvedDate}. Would you like to check another date?`;
+            let noSlots = `Sorry, ${this.bookingState.doctorName} has no available slots on ${resolvedDate}. Would you like to check another date?`;
+            if (detectedLang === 'ta-IN') {
+              noSlots = `மன்னிக்கவும், ${resolvedDate} அன்று ${this.bookingState.doctorName} மருத்துவரிடம் நேரங்கள் இல்லை. வேறு தேதியை பார்க்கவா?`;
+            } else if (detectedLang === 'mixed') {
+              noSlots = `Sorry, ${resolvedDate}-la ${this.bookingState.doctorName}-kitta slots illa. Vera date check pannava?`;
+            } else if (detectedLang === 'hi-IN') {
+              noSlots = `क्षमा करें, ${resolvedDate} को ${this.bookingState.doctorName} के साथ कोई स्लॉट उपलब्ध नहीं है। क्या आप कोई अन्य तारीख देखना चाहेंगे?`;
+            }
             this.bookingState.step = 'awaiting_date';
             return { replyText: noSlots, spokenReply: noSlots, detectedLanguage: detectedLang };
           }
 
-          const offerSlots = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
-            ? `${resolvedDate} அன்று ${slots.slice(0, 2).join(' மற்றும் ')} ஆகிய நேரங்கள் உள்ளன. எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?`
-            : detectedLang === 'hi-IN'
-            ? `${resolvedDate} को उपलब्ध समय: ${slots.slice(0, 2).join(' और ')}। आप कौन सा समय पसंद करेंगे?`
-            : `There are available slots for ${this.bookingState.doctorName} on ${resolvedDate}: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+          let reply = `📅 **Available Slots on ${resolvedDate} (${this.bookingState.doctorName}):**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`;
+          let spoken = `There are available slots for ${this.bookingState.doctorName} on ${resolvedDate}: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
 
-          return {
-            replyText: `📅 **Available Slots on ${resolvedDate} (${this.bookingState.doctorName}):**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
-            spokenReply: offerSlots,
-            detectedLanguage: detectedLang
-          };
+          if (detectedLang === 'ta-IN') {
+            reply = `📅 **${this.bookingState.doctorName} மருத்துவரிடம் ${resolvedDate} அன்று கிடைக்கும் நேரங்கள்:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?*`;
+            spoken = `${resolvedDate} அன்று ${slots.slice(0, 2).join(' மற்றும் ')} ஆகிய நேரங்கள் உள்ளன. எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?`;
+          } else if (detectedLang === 'mixed') {
+            reply = `📅 **${this.bookingState.doctorName}-kitta ${resolvedDate} Available Slots:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Endha slot ungalukku venum?*`;
+            spoken = `${resolvedDate}-la ${slots.slice(0, 2).join(' and ')} slots available-ah irukku. Endha time ungalukku venum?`;
+          } else if (detectedLang === 'hi-IN') {
+            reply = `📅 **${this.bookingState.doctorName} के साथ ${resolvedDate} को उपलब्ध स्लॉट:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*आप कौन सा समय पसंद करेंगे?*`;
+            spoken = `${resolvedDate} को उपलब्ध समय: ${slots.slice(0, 2).join(' और ')}। आप कौन सा समय पसंद करेंगे?`;
+          }
+
+          return { replyText: reply, spokenReply: spoken, detectedLanguage: detectedLang };
         } else {
-          const askDateAgain = `Which date would you prefer with ${this.bookingState.doctorName}? (You can say Tomorrow, next Friday, or a specific date like December 15)`;
+          let askDateAgain = `Which date would you prefer with ${this.bookingState.doctorName}? (You can say Tomorrow, next Friday, or a specific date like December 15)`;
+          if (detectedLang === 'ta-IN') {
+            askDateAgain = `${this.bookingState.doctorName} மருத்துவரிடம் எந்த தேதியில் நீங்கள் வர விரும்புகிறீர்கள்? (உதாரணம்: நாளை, அல்லது ஒரு குறிப்பிட்ட தேதி)`;
+          } else if (detectedLang === 'mixed') {
+            askDateAgain = `${this.bookingState.doctorName}-kitta endha date-ku appointment venum? (Example: Naalaikku, or specific date like December 15)`;
+          } else if (detectedLang === 'hi-IN') {
+            askDateAgain = `आप ${this.bookingState.doctorName} के साथ किस तारीख को आना चाहेंगे? (उदाहरण: कल, या कोई विशेष तारीख)`;
+          }
           return { replyText: askDateAgain, spokenReply: askDateAgain, detectedLanguage: detectedLang };
         }
       }
@@ -517,12 +672,22 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
           }, context);
           const slots: string[] = availRes.data?.availableSlots || ['10:00 AM', '11:30 AM'];
           this.bookingState.availableSlots = slots;
-          const msg = `Doctor changed to ${changedDoc.name} (${changedDoc.specialization}). Available slots on ${this.bookingState.date} are: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
-          return {
-            replyText: `👨‍⚕️ **Doctor Updated to ${changedDoc.name} (${changedDoc.specialization})**\n📅 Available slots on ${this.bookingState.date}:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
-            spokenReply: msg,
-            detectedLanguage: detectedLang
-          };
+
+          let msg = `Doctor changed to ${changedDoc.name} (${changedDoc.specialization}). Available slots on ${this.bookingState.date} are: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+          let reply = `👨‍⚕️ **Doctor Updated to ${changedDoc.name} (${changedDoc.specialization})**\n📅 Available slots on ${this.bookingState.date}:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`;
+
+          if (detectedLang === 'ta-IN') {
+            msg = `மருத்துவர் ${changedDoc.name} (${changedDoc.specialization})-க்கு மாற்றப்பட்டார். ${this.bookingState.date} அன்று கிடைக்கும் நேரங்கள்: ${slots.slice(0, 2).join(' மற்றும் ')}. எந்த நேரம் வேண்டும்?`;
+            reply = `👨‍⚕️ **மருத்துவர் ${changedDoc.name} (${changedDoc.specialization})**\n📅 ${this.bookingState.date} அன்று கிடைக்கும் நேரங்கள்:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*எந்த நேரம் வேண்டும்?*`;
+          } else if (detectedLang === 'mixed') {
+            msg = `Doctor changed to ${changedDoc.name} (${changedDoc.specialization}). ${this.bookingState.date}-la slots: ${slots.slice(0, 2).join(' and ')}. Endha slot venum?`;
+            reply = `👨‍⚕️ **Doctor Updated: ${changedDoc.name} (${changedDoc.specialization})**\n📅 Available slots on ${this.bookingState.date}:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Endha slot venum?*`;
+          } else if (detectedLang === 'hi-IN') {
+            msg = `डॉक्टर बदलकर ${changedDoc.name} (${changedDoc.specialization}) कर दिया गया है। ${this.bookingState.date} को उपलब्ध समय: ${slots.slice(0, 2).join(' और ')}। आप कौन सा समय पसंद करेंगे?`;
+            reply = `👨‍⚕️ **डॉक्टर अपडेट: ${changedDoc.name} (${changedDoc.specialization})**\n📅 ${this.bookingState.date} को उपलब्ध स्लॉट:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*आप कौन सा समय पसंद करेंगे?*`;
+          }
+
+          return { replyText: reply, spokenReply: msg, detectedLanguage: detectedLang };
         }
 
         // 2. Check if patient changed the DATE (e.g. "Change it to December 18" / "No, change date to 2026-11-30")
@@ -544,22 +709,33 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
           this.bookingState.availableSlots = slots;
 
           if (slots.length === 0) {
-            const noSlots = `Sorry, ${this.bookingState.doctorName} has no available slots for ${correctedDate}. Would you like to check another date?`;
+            let noSlots = `Sorry, ${this.bookingState.doctorName} has no available slots for ${correctedDate}. Would you like to check another date?`;
+            if (detectedLang === 'ta-IN') {
+              noSlots = `மன்னிக்கவும், ${correctedDate} அன்று ${this.bookingState.doctorName} மருத்துவரிடம் நேரங்கள் இல்லை. வேறு தேதியை பார்க்கவா?`;
+            } else if (detectedLang === 'mixed') {
+              noSlots = `Sorry, ${correctedDate}-la ${this.bookingState.doctorName}-kitta slots illa. Vera date check pannava?`;
+            } else if (detectedLang === 'hi-IN') {
+              noSlots = `क्षमा करें, ${correctedDate} को ${this.bookingState.doctorName} के साथ कोई स्लॉट उपलब्ध नहीं है। क्या आप कोई अन्य तारीख देखना चाहेंगे?`;
+            }
             this.bookingState.step = 'awaiting_date';
             return { replyText: noSlots, spokenReply: noSlots, detectedLanguage: detectedLang };
           }
 
-          const offerSlots = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
-            ? `தேதி ${correctedDate}-க்கு மாற்றப்பட்டது. கிடைக்கும் நேரங்கள்: ${slots.slice(0, 2).join(' மற்றும் ')}. எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?`
-            : detectedLang === 'hi-IN'
-            ? `तारीख बदलकर ${correctedDate} कर दी गई है। उपलब्ध समय: ${slots.slice(0, 2).join(' और ')}। आप कौन सा समय पसंद करेंगे?`
-            : `Date updated to ${correctedDate} for ${this.bookingState.doctorName}. Available slots are: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+          let offerSlots = `Date updated to ${correctedDate} for ${this.bookingState.doctorName}. Available slots are: ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+          let reply = `📅 **Updated Date to ${correctedDate} (${this.bookingState.doctorName}):**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`;
 
-          return {
-            replyText: `📅 **Updated Date to ${correctedDate} (${this.bookingState.doctorName}):**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
-            spokenReply: offerSlots,
-            detectedLanguage: detectedLang
-          };
+          if (detectedLang === 'ta-IN') {
+            offerSlots = `தேதி ${correctedDate}-க்கு மாற்றப்பட்டது. கிடைக்கும் நேரங்கள்: ${slots.slice(0, 2).join(' மற்றும் ')}. எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?`;
+            reply = `📅 **தேதி ${correctedDate}-க்கு மாற்றப்பட்டது (${this.bookingState.doctorName}):**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*எந்த நேரம் வேண்டும்?*`;
+          } else if (detectedLang === 'mixed') {
+            offerSlots = `Date ${correctedDate}-ku update aachu. Slots: ${slots.slice(0, 2).join(' and ')}. Endha time venum?`;
+            reply = `📅 **Updated Date to ${correctedDate} (${this.bookingState.doctorName}):**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Endha slot venum?*`;
+          } else if (detectedLang === 'hi-IN') {
+            offerSlots = `तारीख बदलकर ${correctedDate} कर दी गई है। उपलब्ध समय: ${slots.slice(0, 2).join(' और ')}। आप कौन सा समय पसंद करेंगे?`;
+            reply = `📅 **तारीख अपडेट: ${correctedDate} (${this.bookingState.doctorName}):**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*आप कौन सा समय पसंद करेंगे?*`;
+          }
+
+          return { replyText: reply, spokenReply: offerSlots, detectedLanguage: detectedLang };
         }
 
         // 3. Otherwise, process as slot choice
@@ -572,22 +748,31 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
         const date = this.bookingState.date || 'tomorrow';
         const time = this.bookingState.time;
 
-        const confirmationPrompt = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
-          ? `${department} துறையில் ${doctorName} மருத்துவரிடம் ${date} அன்று ${time} மணிக்கு appointment உறுதி செய்யவா?`
-          : detectedLang === 'hi-IN'
-          ? `क्या मैं ${department} विभाग में ${doctorName} के साथ ${date} को ${time} बजे अपॉइंटमेंट कन्फर्म करूँ?`
-          : `I have ${doctorName} in ${department} on ${date} at ${time}. Should I confirm this appointment?`;
+        let confirmationPrompt = `I have ${doctorName} in ${department} on ${date} at ${time}. Should I confirm this appointment?`;
+        let confirmReply = `📋 **Please Confirm Your Appointment:**\n• **Doctor:** ${doctorName}\n• **Department:** ${department}\n• **Date:** ${date}\n• **Time:** ${time}\n\n**Should I confirm this appointment?** *(Say "Yes" to confirm or "No" to cancel)*`;
 
-        return {
-          replyText: `📋 **Please Confirm Your Appointment:**\n• **Doctor:** ${doctorName}\n• **Department:** ${department}\n• **Date:** ${date}\n• **Time:** ${time}\n\n**Should I confirm this appointment?** *(Say "Yes" to confirm or "No" to cancel)*`,
-          spokenReply: confirmationPrompt,
-          detectedLanguage: detectedLang
-        };
+        if (detectedLang === 'ta-IN') {
+          confirmationPrompt = `${department} துறையில் ${doctorName} மருத்துவரிடம் ${date} அன்று ${time} மணிக்கு appointment உறுதி செய்யவா?`;
+          confirmReply = `📋 **முன்பதிவை உறுதிப்படுத்தவும்:**\n• **மருத்துவர்:** ${doctorName}\n• **துறை:** ${department}\n• **தேதி:** ${date}\n• **நேரம்:** ${time}\n\n**இந்த appointment-ஐ உறுதி செய்யவா?** *(உறுதி செய்ய "ஆம்" என்றும், ரத்து செய்ய "இல்லை" என்றும் கூறவும்)*`;
+        } else if (detectedLang === 'mixed') {
+          confirmationPrompt = `${department} department-la ${doctorName} kitta ${date} anikku ${time}-ku appointment confirm pannava?`;
+          confirmReply = `📋 **Appointment Confirmation:**\n• **Doctor:** ${doctorName}\n• **Department:** ${department}\n• **Date:** ${date}\n• **Time:** ${time}\n\n**Intha appointment confirm pannava?** *("Yes" nu sollunga)*`;
+        } else if (detectedLang === 'hi-IN') {
+          confirmationPrompt = `क्या मैं ${department} विभाग में ${doctorName} के साथ ${date} को ${time} बजे अपॉइंटमेंट कन्फर्म करूँ?`;
+          confirmReply = `📋 **कृपया अपनी अपॉइंटमेंट की पुष्टि करें:**\n• **डॉक्टर:** ${doctorName}\n• **विभाग:** ${department}\n• **तारीख:** ${date}\n• **समय:** ${time}\n\n**क्या मैं यह अपॉइंटमेंट कन्फर्म करूँ?** *(कन्फर्म करने के लिए "हाँ" कहें)*`;
+        }
+
+        return { replyText: confirmReply, spokenReply: confirmationPrompt, detectedLanguage: detectedLang };
       }
 
       // Step: Explicit Confirmation Response Check
       if (this.bookingState.step === 'awaiting_confirmation') {
-        if (q.includes('yes') || q.includes('confirm') || q.includes('sure') || q.includes('correct') || q.includes('aama') || q.includes('haan')) {
+        const isConfirmAffirmative =
+          q.includes('yes') || q.includes('confirm') || q.includes('sure') || q.includes('correct') ||
+          q.includes('aama') || q.includes('haan') || q.includes('ஆம்') || q.includes('சரி') ||
+          q.includes('உறுதி') || q.includes('हाँ') || q.includes('जी हाँ');
+
+        if (isConfirmAffirmative) {
           const finalDocId = this.bookingState.doctorId;
           const finalDocName = this.bookingState.doctorName;
           const finalSpec = this.bookingState.doctorSpec!;
@@ -602,17 +787,64 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
             time: finalTime
           }, context);
 
-          return {
-            replyText: bookingResult.message,
-            spokenReply: bookingResult.spokenFeedback,
-            detectedLanguage: detectedLang,
-            toolCallResult: bookingResult
-          };
+          if (bookingResult.success) {
+            let successReply = `✅ **Appointment Confirmed!**\n• **Doctor:** ${finalDocName}\n• **Department:** ${finalSpec}\n• **Date:** ${finalDate}\n• **Time:** ${finalTime}\n\nYour appointment has been synchronized with the hospital system.`;
+            let successSpoken = `Your appointment with ${finalDocName} in ${finalSpec} has been confirmed for ${finalDate} at ${finalTime}.`;
+
+            if (detectedLang === 'ta-IN') {
+              successReply = `✅ **முன்பதிவு வெற்றிகரமாக முடிந்தது!**\n• **மருத்துவர்:** ${finalDocName}\n• **துறை:** ${finalSpec}\n• **தேதி:** ${finalDate}\n• **நேரம்:** ${finalTime}\n\nஉங்கள் விவரங்கள் நோயாளி மற்றும் மருத்துவர் போர்ட்டல்களில் பதிவு செய்யப்பட்டுள்ளன.`;
+              successSpoken = `${finalDocName} மருத்துவரிடம் ${finalDate} அன்று ${finalTime} மணிக்கு உங்கள் appointment உறுதி செய்யப்பட்டது.`;
+            } else if (detectedLang === 'mixed') {
+              successReply = `✅ **Appointment Confirmed!**\n• **Doctor:** ${finalDocName}\n• **Department:** ${finalSpec}\n• **Date:** ${finalDate}\n• **Time:** ${finalTime}\n\nPortal-la appointment synchronize aayiduchu.`;
+              successSpoken = `${finalDocName} kitta ${finalDate} anikku ${finalTime}-ku unga appointment confirm aayiduchu!`;
+            } else if (detectedLang === 'hi-IN') {
+              successReply = `✅ **अपॉइंटमेंट सफलतापूर्वक बुक हो गई!**\n• **डॉक्टर:** ${finalDocName}\n• **विभाग:** ${finalSpec}\n• **तारीख:** ${finalDate}\n• **समय:** ${finalTime}\n\nविवरण आपके पोर्टल में अपडेट कर दिया गया है।`;
+              successSpoken = `${finalDocName} के साथ ${finalDate} को ${finalTime} बजे आपकी अपॉइंटमेंट कन्फर्म हो गई है।`;
+            }
+
+            return {
+              replyText: successReply,
+              spokenReply: successSpoken,
+              detectedLanguage: detectedLang,
+              toolCallResult: bookingResult
+            };
+          } else {
+            // Failure (e.g. duplicate or slot taken)
+            let failReply = bookingResult.message;
+            let failSpoken = bookingResult.spokenFeedback;
+            if (detectedLang === 'ta-IN') {
+              failReply = `⚠️ **முன்பதிவு தோல்வி:** ${bookingResult.message}`;
+              failSpoken = `மன்னிக்கவும், இந்த நேரத்தில் முன்பதிவு செய்ய முடியவில்லை. தயவுசெய்து வேறு நேரத்தை தேர்வு செய்யவும்.`;
+            } else if (detectedLang === 'mixed') {
+              failReply = `⚠️ **Booking Issue:** ${bookingResult.message}`;
+              failSpoken = `Sorry, indha slot-la book panna mudiyala. Vera time choose pannunga.`;
+            } else if (detectedLang === 'hi-IN') {
+              failReply = `⚠️ **बुकिंग विफल:** ${bookingResult.message}`;
+              failSpoken = `क्षमा करें, इस समय अपॉइंटमेंट बुक नहीं हो सकी। कृपया कोई अन्य समय चुनें।`;
+            }
+            return {
+              replyText: failReply,
+              spokenReply: failSpoken,
+              detectedLanguage: detectedLang,
+              toolCallResult: bookingResult
+            };
+          }
         }
 
-        if (q.includes('no') || q.includes('cancel') || q.includes('vendaam') || q.includes('nahi')) {
+        const isConfirmNegative =
+          q.includes('no') || q.includes('cancel') || q.includes('vendaam') || q.includes('nahi') ||
+          q.includes('இல்லை') || q.includes('வேண்டாம்') || q.includes('नहीं');
+
+        if (isConfirmNegative) {
           this.bookingState = { inProgress: false, step: 'idle' };
-          const cancelMsg = "Appointment booking has been cancelled. Let me know if you would like to book a different time.";
+          let cancelMsg = "Appointment booking has been cancelled. Let me know if you would like to book a different time.";
+          if (detectedLang === 'ta-IN') {
+            cancelMsg = "முன்பதிவு ரத்து செய்யப்பட்டது. உங்களுக்கு வேறு நேரம் தேவைப்பட்டால் கூறவும்.";
+          } else if (detectedLang === 'mixed') {
+            cancelMsg = "Appointment booking cancel aayiduchu. Vera time venumna sollunga.";
+          } else if (detectedLang === 'hi-IN') {
+            cancelMsg = "अपॉइंटमेंट बुकिंग रद्द कर दी गई है। यदि आप कोई अन्य समय बुक करना चाहते हैं तो बताएं।";
+          }
           return { replyText: cancelMsg, spokenReply: cancelMsg, detectedLanguage: detectedLang };
         }
 
@@ -673,6 +905,80 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
     // 5. DIRECT ACTION COMMANDS (Conversational Handling)
     // =============================================================
 
+    // 5A. SYMPTOM-TO-SPECIALIST RECOGNITION & BOOKING INTEGRATION
+    // (Part 2 & Part 3: All 10 registered doctors, natural language symptoms,
+    //  Tamil, Hindi, Tanglish, and English with specialist priority)
+    const symptomMatch = matchSymptomToSpecialist(transcript);
+    if (symptomMatch && !isExplicitNavCommand && !isIdentityQuery && !isProhibitedQuery) {
+      if (symptomMatch.isEmergency) {
+        const emergencyResult = await VoiceToolDispatcher.executeTool('get_emergency_info', {}, context);
+        const spoken = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
+          ? "அவசர உதவிக்கு உடனடியாக Ground Floor Room ER-101 அல்லது 123 456 7890 என்ற எண்ணை தொடர்பு கொள்ளவும்."
+          : emergencyResult.spokenFeedback;
+        return {
+          replyText: `🚨 **URGENT EMERGENCY ALERT**\n\n${symptomMatch.emergencyWarning || emergencyResult.message}`,
+          spokenReply: spoken,
+          detectedLanguage: detectedLang,
+          toolCallResult: emergencyResult
+        };
+      }
+
+      // Check if user also gave a date in the same utterance (e.g. "Tooth pain, book tomorrow")
+      const date = parseDateFromText(q);
+      const monthOnly = detectMonthOnly(q);
+
+      if (date) {
+        this.bookingState = {
+          inProgress: true,
+          step: 'awaiting_slot',
+          doctorSpec: symptomMatch.department,
+          doctorName: symptomMatch.doctorName,
+          doctorId: symptomMatch.doctorId,
+          date: date
+        };
+
+        const availRes = await VoiceToolDispatcher.executeTool('check_doctor_availability', {
+          specialtyOrName: symptomMatch.doctorId || symptomMatch.doctorName,
+          date: date
+        }, context);
+        const slots: string[] = availRes.data?.availableSlots || ['10:00 AM', '11:30 AM'];
+        this.bookingState.availableSlots = slots;
+
+        let reply = `🩺 **${symptomMatch.department} Specialist: ${symptomMatch.doctorName}**\n📅 Available slots on ${date}:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`;
+        let spoken = `Based on your symptoms, ${symptomMatch.department} with ${symptomMatch.doctorName} is recommended. Available slots on ${date} are ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+
+        if (detectedLang === 'ta-IN') {
+          reply = `🩺 **${symptomMatch.department} சிறப்பு மருத்துவர்: ${symptomMatch.doctorName}**\n📅 ${date} அன்று கிடைக்கும் நேரங்கள்:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?*`;
+          spoken = `உங்கள் அறிகுறிகளுக்கு ${symptomMatch.department} மருத்துவர் ${symptomMatch.doctorName} பொருத்தமானவர். ${date} அன்று ${slots.slice(0, 2).join(' மற்றும் ')} நேரங்கள் உள்ளன. எந்த நேரம் வேண்டும்?`;
+        } else if (detectedLang === 'mixed') {
+          reply = `🩺 **${symptomMatch.department} Specialist: ${symptomMatch.doctorName}**\n📅 ${date} Available Slots:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Endha slot venum?*`;
+          spoken = `Unga symptoms-ku ${symptomMatch.department} specialist ${symptomMatch.doctorName} suitable. ${date}-la ${slots.slice(0, 2).join(' and ')} slots available. Endha time venum?`;
+        } else if (detectedLang === 'hi-IN') {
+          reply = `🩺 **${symptomMatch.department} विशेषज्ञ: ${symptomMatch.doctorName}**\n📅 ${date} को उपलब्ध स्लॉट:\n${slots.map(s => `• ${s}`).join('\n')}\n\n*आप कौन सा समय पसंद करेंगे?*`;
+          spoken = `आपके लक्षणों के लिए ${symptomMatch.department} विशेषज्ञ ${symptomMatch.doctorName} उपयुक्त हैं। ${date} को ${slots.slice(0, 2).join(' और ')} उपलब्ध हैं। आप कौन सा समय पसंद करेंगे?`;
+        }
+
+        return { replyText: reply, spokenReply: spoken, detectedLanguage: detectedLang };
+      }
+
+      // No date yet: suggest specialist and ask to book (preserving doctor in state)
+      this.bookingState = {
+        inProgress: true,
+        step: 'awaiting_booking_consent',
+        doctorSpec: symptomMatch.department,
+        doctorName: symptomMatch.doctorName,
+        doctorId: symptomMatch.doctorId,
+        symptomTriggered: true
+      };
+
+      const resp = symptomMatch.suggestedResponses[detectedLang] || symptomMatch.suggestedResponses.en;
+      return {
+        replyText: `🩺 **Specialist Recommendation:**\n${resp}`,
+        spokenReply: resp,
+        detectedLanguage: detectedLang
+      };
+    }
+
     // A. Start Appointment Booking
     const isBookingStarter = 
       q.includes('book an appointment') || q.includes('book appointment') || 
@@ -712,14 +1018,15 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
       };
 
       if (!spec) {
-        const deptList = getAllDepartments(MOCK_DOCTORS).join(', ');
-        let askSpec = `Sure. Which department or doctor would you like to consult? (e.g. ${deptList})`;
+        let askSpec = `Certainly! Which doctor would you like to consult, or would you like me to suggest a specialist based on your symptoms?`;
         if (detectedLang === 'ta-IN') {
-          askSpec = `நிச்சயமாக! எந்த மருத்துவ துறை அல்லது எந்த மருத்துவரிடம் உங்களுக்கு ஆலோசனை வேண்டும்? (${deptList})`;
+          askSpec = `உங்களுக்கு எந்த மருத்துவரை சந்திக்க வேண்டும்? எந்தப் பிரிவில் முன்பதிவு செய்ய விரும்புகிறீர்கள்?`;
         } else if (detectedLang === 'mixed') {
-          askSpec = `Sure! Entha department illa entha doctor-ah consult panna virumbureenga? (${deptList})`;
+          askSpec = `Kandippa! Endha doctor-ah paakanum? Illa unga problem enna-nu sollunga, suitable specialist-ah suggest panren.`;
         } else if (detectedLang === 'hi-IN') {
-          askSpec = `ज़रूर! आप किस विभाग या डॉक्टर से परामर्श करना चाहते हैं? (${deptList})`;
+          askSpec = monthOnly
+            ? `आप किस डॉक्टर से मिलना चाहते हैं? मैं अगले महीने की उपलब्ध अपॉइंटमेंट तारीखें देख सकता हूँ।`
+            : `आप किस डॉक्टर से मिलना चाहते हैं? किस विभाग में अपॉइंटमेंट बुक करना चाहेंगे?`;
         }
         return { replyText: askSpec, spokenReply: askSpec, detectedLanguage: detectedLang };
       }
@@ -762,9 +1069,23 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
       this.bookingState.step = 'awaiting_slot';
 
       const docDisplay = doc?.name || `our ${spec} specialist`;
+      let reply = `📅 **Available Slots for ${docDisplay} on ${date}:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`;
+      let spoken = `Available slots for ${docDisplay} on ${date} are ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`;
+
+      if (detectedLang === 'ta-IN') {
+        reply = `📅 **${docDisplay} மருத்துவரிடம் ${date} அன்று கிடைக்கும் நேரங்கள்:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?*`;
+        spoken = `${date} அன்று ${slots.slice(0, 2).join(' மற்றும் ')} ஆகிய நேரங்கள் உள்ளன. எந்த நேரம் உங்களுக்கு வசதியாக இருக்கும்?`;
+      } else if (detectedLang === 'mixed') {
+        reply = `📅 **${docDisplay}-kitta ${date} Slots:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Endha slot venum?*`;
+        spoken = `${date}-la ${slots.slice(0, 2).join(' and ')} slots available-ah irukku. Endha time ungalukku venum?`;
+      } else if (detectedLang === 'hi-IN') {
+        reply = `📅 **${docDisplay} के साथ ${date} को उपलब्ध स्लॉट:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*आप कौन सा समय पसंद करेंगे?*`;
+        spoken = `${date} को उपलब्ध समय: ${slots.slice(0, 2).join(' और ')}। आप कौन सा समय पसंद करेंगे?`;
+      }
+
       return {
-        replyText: `📅 **Available Slots for ${docDisplay} on ${date}:**\n${slots.map(s => `• ${s}`).join('\n')}\n\n*Which slot would you prefer?*`,
-        spokenReply: `Available slots for ${docDisplay} on ${date} are ${slots.slice(0, 2).join(' and ')}. Which one would you prefer?`,
+        replyText: reply,
+        spokenReply: spoken,
         detectedLanguage: detectedLang
       };
     }
@@ -775,9 +1096,13 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
       q.includes('appointment cancel') || q.includes('cancel panni kudu')
     ) {
       if (!context.currentUser) {
+        let notLogged = 'Please log in to your patient account first to manage or cancel appointments.';
+        if (detectedLang === 'ta-IN') notLogged = 'அப்பாயிண்ட்மென்ட் ரத்து செய்ய முதலில் உங்கள் நோயாளி கணக்கில் உள்நுழையவும்.';
+        else if (detectedLang === 'mixed') notLogged = 'Appointment cancel panna mudhalla patient account-la log in pannunga.';
+        else if (detectedLang === 'hi-IN') notLogged = 'अपॉइंटमेंट रद्द करने के लिए कृपया पहले अपने रोगी खाते में लॉगिन करें।';
         return {
-          replyText: 'Please log in to your patient account first to manage or cancel appointments.',
-          spokenReply: 'Please log in as a patient to cancel an appointment.',
+          replyText: notLogged,
+          spokenReply: notLogged,
           detectedLanguage: detectedLang
         };
       }
@@ -787,7 +1112,10 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
       );
 
       if (upcoming.length === 0) {
-        const msg = "You currently have no upcoming appointments to cancel.";
+        let msg = "You currently have no upcoming appointments to cancel.";
+        if (detectedLang === 'ta-IN') msg = "உங்களுக்கு தற்போது ரத்து செய்ய வேண்டிய வரவிருக்கும் முன்பதிவுகள் எதுவும் இல்லை.";
+        else if (detectedLang === 'mixed') msg = "Unga account-la ippo upcoming appointments edhum illa cancel panna.";
+        else if (detectedLang === 'hi-IN') msg = "रद्द करने के लिए आपके पास वर्तमान में कोई आगामी अपॉइंटमेंट नहीं है।";
         return { replyText: msg, spokenReply: msg, detectedLanguage: detectedLang };
       }
 
@@ -800,12 +1128,22 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
         time: target.time
       };
 
-      const askConfirm = (detectedLang === 'ta-IN' || detectedLang === 'mixed')
-        ? `${target.doctorName} மருத்துவரிடம் ${target.date} அன்று உள்ள உங்கள் appointment-ஐ ரத்து செய்ய விரும்புகிறீர்களா? (Yes / No)`
-        : `Are you sure you want to cancel your upcoming appointment with ${target.doctorName} on ${target.date} at ${target.time}?`;
+      let askConfirm = `Are you sure you want to cancel your upcoming appointment with ${target.doctorName} on ${target.date} at ${target.time}?`;
+      let confirmReply = `⚠️ **Confirm Cancellation:**\n• **Doctor:** ${target.doctorName}\n• **Date:** ${target.date} at ${target.time}\n\n**Are you sure you want to cancel this appointment?** *(Say "Yes" to cancel)*`;
+
+      if (detectedLang === 'ta-IN') {
+        askConfirm = `${target.doctorName} மருத்துவரிடம் ${target.date} அன்று உள்ள உங்கள் appointment-ஐ ரத்து செய்ய விரும்புகிறீர்களா? (Yes / No)`;
+        confirmReply = `⚠️ **முன்பதிவு ரத்து உறுதிப்படுத்தல்:**\n• **மருத்துவர்:** ${target.doctorName}\n• **தேதி:** ${target.date} (${target.time})\n\n**இந்த appointment-ஐ ரத்து செய்யவா?** *(ரத்து செய்ய "ஆம்" எனக் கூறவும்)*`;
+      } else if (detectedLang === 'mixed') {
+        askConfirm = `${target.doctorName} kitta ${target.date} anikku irukra appointment-ah cancel panna poringala?`;
+        confirmReply = `⚠️ **Confirm Cancellation:**\n• **Doctor:** ${target.doctorName}\n• **Date:** ${target.date} at ${target.time}\n\n**Intha appointment-ah cancel pannava?** *("Yes" nu sollunga)*`;
+      } else if (detectedLang === 'hi-IN') {
+        askConfirm = `क्या आप ${target.doctorName} के साथ ${target.date} को ${target.time} बजे अपनी अपॉइंटमेंट रद्द करना चाहते हैं?`;
+        confirmReply = `⚠️ **अपॉइंटमेंट रद्द करने की पुष्टि:**\n• **डॉक्टर:** ${target.doctorName}\n• **तारीख:** ${target.date} (${target.time})\n\n**क्या आप यह अपॉइंटमेंट रद्द करना चाहते हैं?** *(रद्द करने के लिए "हाँ" कहें)*`;
+      }
 
       return {
-        replyText: `⚠️ **Confirm Cancellation:**\n• **Doctor:** ${target.doctorName}\n• **Date:** ${target.date} at ${target.time}\n\n**Are you sure you want to cancel this appointment?** *(Say "Yes" to cancel)*`,
+        replyText: confirmReply,
         spokenReply: askConfirm,
         detectedLanguage: detectedLang
       };
@@ -814,14 +1152,21 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
     // C. Reschedule Appointment
     if (q.includes('reschedule my appointment') || q.includes('reschedule appointment') || q.includes('change appointment time')) {
       if (!context.currentUser) {
+        let msg = 'Please log in to reschedule your appointment.';
+        if (detectedLang === 'ta-IN') msg = 'அப்பாயிண்ட்மென்ட் மாற்றி அமைக்க முதலில் உள்நுழையவும்.';
+        else if (detectedLang === 'mixed') msg = 'Appointment reschedule panna login pannunga.';
+        else if (detectedLang === 'hi-IN') msg = 'अपॉइंटमेंट बदलने के लिए कृपया लॉगिन करें।';
         return {
-          replyText: 'Please log in to reschedule your appointment.',
-          spokenReply: 'Please log in to reschedule your appointment.',
+          replyText: msg,
+          spokenReply: msg,
           detectedLanguage: detectedLang
         };
       }
       this.bookingState = { inProgress: true, step: 'awaiting_spec' };
-      const ask = "Sure! Which doctor or department would you like to reschedule?";
+      let ask = "Sure! Which doctor or department would you like to reschedule?";
+      if (detectedLang === 'ta-IN') ask = "நிச்சயமாக! எந்த மருத்துவர் அல்லது துறையை மாற்றி அமைக்க வேண்டும்?";
+      else if (detectedLang === 'mixed') ask = "Sure! Entha doctor illa department reschedule pannanum?";
+      else if (detectedLang === 'hi-IN') ask = "ज़रूर! आप किस डॉक्टर या विभाग की अपॉइंटमेंट बदलना चाहते हैं?";
       return { replyText: ask, spokenReply: ask, detectedLanguage: detectedLang };
     }
 
@@ -877,17 +1222,24 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
         spoken = `எங்கள் சிறப்பு மருத்துவர்கள் விவரங்கள் உள்ளன. எந்த மருத்துவரிடம் நீங்கள் ஆலோசனை பெற விரும்புகிறீர்கள்?`;
       } else if (detectedLang === 'mixed') {
         reply = `🏥 **Hospital Specialists List:**\n${docListStr}\n\n*Entha doctor-ah consult panna virumbureenga?*`;
-        spoken = `Namma hospital-la Cardiology, Pediatrics, Neurology, Orthopedics specialists irukaanga. Yaarai consult panna virumbureenga?`;
+        spoken = `Namma hospital-la Cardiology, Pediatrics, Neurology, Orthopedics, Dentistry, General Medicine koodave 10 specialists irukaanga. Yaarai consult panna virumbureenga?`;
       } else if (detectedLang === 'hi-IN') {
         reply = `🏥 **हमारे अस्पताल के विशेषज्ञ डॉक्टर:**\n${docListStr}\n\n*आप किसी भी डॉक्टर के बारे में पूछ सकते हैं या अपॉइंटमेंट बुक करने के लिए कह सकते हैं।*`;
-        spoken = `हमारे यहाँ विशेषज्ञ डॉक्टर उपलब्ध हैं। आप किस डॉक्टर से परामर्श लेना चाहते हैं?`;
+        spoken = `हमारे यहाँ 10 विशेषज्ञ डॉक्टर उपलब्ध हैं। आप किस डॉक्टर से परामर्श लेना चाहते हैं?`;
       }
 
       return { replyText: reply, spokenReply: spoken, detectedLanguage: detectedLang };
     }
 
     // E. Check My Appointments (Personal Appointments)
-    if (q.includes('my appointment') || q.includes('upcoming appointments') || q.includes('ennoda appointment')) {
+    if (q.includes('my appointment') || q.includes('upcoming appointments') || q.includes('ennoda appointment') || q.includes('mera appointment') || q.includes('என் அப்பாயிண்ட்மெண்ட்')) {
+      if (!context.currentUser) {
+        let msg = 'Please log in to your patient account first to view your scheduled appointments.';
+        if (detectedLang === 'ta-IN') msg = 'உங்கள் அப்பாயிண்ட்மென்ட்களைப் பார்க்க முதலில் உள்நுழையவும்.';
+        else if (detectedLang === 'mixed') msg = 'Unga appointments paaka mudhalla patient account-la login pannunga.';
+        else if (detectedLang === 'hi-IN') msg = 'अपनी अपॉइंटमेंट देखने के लिए कृपया पहले लॉगिन करें।';
+        return { replyText: msg, spokenReply: msg, detectedLanguage: detectedLang };
+      }
       const toolRes = await VoiceToolDispatcher.executeTool('get_my_appointments', {}, context);
       return { replyText: toolRes.message, spokenReply: toolRes.spokenFeedback, detectedLanguage: detectedLang, toolCallResult: toolRes };
     }
@@ -960,11 +1312,45 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
 
     const lower = transcript.toLowerCase().trim();
 
+    // Explicit Language Switching
+    if (
+      lower.includes('speak in tamil') || lower.includes('switch to tamil') ||
+      lower.includes('tamil-la pesu') || lower.includes('tamizh-la pesu') ||
+      lower.includes('tamil la pesu') || lower.includes('tamil please')
+    ) {
+      return 'ta-IN';
+    }
+
+    if (
+      lower.includes('speak in hindi') || lower.includes('switch to hindi') ||
+      lower.includes('hindi me bolo') || lower.includes('hindi me baat') ||
+      lower.includes('hindi please')
+    ) {
+      return 'hi-IN';
+    }
+
+    if (
+      lower.includes('speak in tanglish') || lower.includes('switch to tanglish') ||
+      lower.includes('tanglish-la pesu') || lower.includes('tanglish la pesu') ||
+      lower.includes('tanglish please')
+    ) {
+      return 'mixed';
+    }
+
+    if (
+      lower.includes('speak in english') || lower.includes('switch to english') ||
+      lower.includes('english please') || lower.includes('talk in english')
+    ) {
+      return 'en-IN';
+    }
+
     const tanglishKeywords = [
       'vanakkam', 'ennoda', 'irukku', 'irukkangala', 'panna', 'pannanum', 'mudiyuma', 'mudiyum',
       'eppo', 'eppodhu', 'marunthu', 'venum', 'aama', 'vendaam', 'peru', 'enga',
       'epdi', 'vazhi', 'kudunga', 'paakanum', 'ungalukku', 'neenga', 'yaaru', 'enna',
-      'enakku', 'mattum', 'dhaan', 'matha', 'pannunga', 'solleenga'
+      'enakku', 'mattum', 'dhaan', 'matha', 'pannunga', 'solleenga', 'valikuthu', 'valikkuthu',
+      'vali', 'pallu', 'pal', 'mutti', 'kuzhandhai', 'kaachal', 'sali', 'udambu', 'naalaikku',
+      'endha', 'kitta', 'sollunga', 'koodave', 'therinjukka', 'paaka', 'kaal', 'muthugu'
     ];
     if (tanglishKeywords.some(kw => lower.includes(kw))) {
       return 'mixed';
@@ -972,7 +1358,9 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
 
     const hinglishKeywords = [
       'namaste', 'kaun', 'chahiye', 'karna', 'karni', 'batao', 'dawa', 'milna', 'kahan',
-      'aaj', 'kal', 'apna', 'naam', 'kaise', 'mujhe', 'karo', 'hoga', 'mera', 'meri'
+      'aaj', 'kal', 'apna', 'naam', 'kaise', 'mujhe', 'karo', 'hoga', 'mera', 'meri',
+      'dard', 'ghutne', 'daant', 'bukhar', 'sardi', 'hai', 'bhi', 'kya', 'nahi', 'haan',
+      'theek', 'aapka', 'chhattee', 'seene', 'bachhe', 'bacha'
     ];
     if (hinglishKeywords.some(kw => lower.includes(kw))) {
       return 'hi-IN';
@@ -981,14 +1369,15 @@ export class WebSpeechAdapter implements IVoiceProviderAdapter {
     // If user explicitly asks a new command/question in English
     const englishSentenceStarters = [
       'what is', 'who is', 'how can', 'i want', 'can i', 'book an', 'book a', 'cancel my',
-      'reschedule my', 'tell me', 'show me', 'open ', 'where is', 'guide me', 'connect me'
+      'reschedule my', 'tell me', 'show me', 'open ', 'where is', 'guide me', 'connect me',
+      'i need', 'i have', 'my knee', 'my tooth', 'teeth alignment'
     ];
     if (englishSentenceStarters.some(starter => lower.startsWith(starter) || lower.includes(starter))) {
       return 'en-IN';
     }
 
-    // Retain existing active language during short multi-turn slot/confirmation answers (e.g. "Cardiology", "Tomorrow", "Yes", "10 AM")
-    if (fallback && fallback !== 'mixed') {
+    // Retain existing active language during multi-turn slot/confirmation answers (e.g. "Tomorrow", "Yes", "10 AM", "December 15")
+    if (fallback) {
       return fallback;
     }
 
